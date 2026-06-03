@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A* 规划 + MPC 闭环数据流精确版</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5d6875;
+      --line: #8fa0b2;
+      --scene: #dbeafe;
+      --scene-border: #5b8def;
+      --loop: #dcfce7;
+      --loop-border: #2f9e5f;
+      --mpc: #fff3cd;
+      --mpc-border: #d39e00;
+      --ekf: #ede9fe;
+      --ekf-border: #8b5cf6;
+      --out: #fee2e2;
+      --out-border: #d96b6b;
+      --code: #eef1f5;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      line-height: 1.5;
+    }
+
+    header {
+      padding: 24px 32px 12px;
+      background: var(--panel);
+      border-bottom: 1px solid #dfe4ea;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 1100px;
+    }
+
+    main { padding: 24px 32px 40px; }
+
+    section {
+      margin: 0 0 24px;
+      padding: 20px;
+      background: var(--panel);
+      border: 1px solid #dfe4ea;
+      border-radius: 8px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+
+    li { margin: 4px 0; }
+
+    code {
+      padding: 2px 5px;
+      background: var(--code);
+      border-radius: 4px;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.95em;
+    }
+
+    .diagram-wrap {
+      overflow: auto;
+      border: 1px solid #e5e9ef;
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+
+    svg {
+      display: block;
+      min-width: 1700px;
+      width: 100%;
+      height: auto;
+    }
+
+    .node rect {
+      fill: #fff;
+      stroke: #c7d0da;
+      stroke-width: 1.5;
+      rx: 9;
+    }
+
+    .scene rect { fill: var(--scene); stroke: var(--scene-border); }
+    .loop rect { fill: var(--loop); stroke: var(--loop-border); }
+    .mpc rect { fill: var(--mpc); stroke: var(--mpc-border); }
+    .ekf rect { fill: var(--ekf); stroke: var(--ekf-border); }
+    .out rect { fill: var(--out); stroke: var(--out-border); }
+
+    .title {
+      font-size: 16px;
+      font-weight: 700;
+      fill: var(--ink);
+    }
+
+    .fn {
+      font-size: 12px;
+      fill: #344052;
+      font-family: Consolas, "Cascadia Mono", monospace;
+    }
+
+    .body {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .small {
+      font-size: 11px;
+      fill: var(--muted);
+    }
+
+    .edge {
+      stroke: var(--line);
+      stroke-width: 1.7;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .edge-label rect {
+      fill: #fff;
+      stroke: #d8dee7;
+      rx: 5;
+    }
+
+    .edge-label text {
+      font-size: 12px;
+      fill: #344052;
+      font-family: Consolas, "Cascadia Mono", monospace;
+    }
+
+    .group {
+      fill: rgba(255, 255, 255, 0.35);
+      stroke-width: 2;
+      stroke-dasharray: 10 7;
+      rx: 14;
+    }
+
+    .group.scene-group { stroke: var(--scene-border); }
+    .group.loop-group { stroke: var(--loop-border); fill: rgba(220, 252, 231, 0.22); }
+    .group.mpc-group { stroke: var(--mpc-border); fill: rgba(255, 243, 205, 0.18); }
+
+    .group-title {
+      font-size: 16px;
+      font-weight: 700;
+      fill: #253040;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>A* 规划 + MPC 闭环数据流精确版</h1>
+    <p class="subtitle">
+      这张图按当前代码实现重画：区分场景构建、MPC 初始化一次、每拍闭环循环、MPC 单次求解内部。
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>相对原图的主要修正</h2>
+      <ul>
+        <li><code>find_nearest()</code> 不在 MPC 内部，而是在 <code>run_simulation()</code> 每一拍调用，然后把 <code>nearest_idx</code> 传给控制器。</li>
+        <li>MPC 的 <code>_build_problem()</code> 只在初始化时执行一次；每拍只更新 <code>cvxpy Parameter.value</code> 并调用 <code>prob.solve(OSQP)</code>。</li>
+        <li>参考窗口不是简单取“最近点后 N 个索引点”，而是 <code>get_reference_window_by_time()</code> 按 <code>v_ref * dt</code> 沿弧长插值得到。</li>
+        <li>参考控制不是独立预先生成的完整控制序列，而是在 <code>solve()</code> 内由曲率临时反推：<code>delta_ref = atan(L*kappa)</code>，<code>a_ref = 0</code>。</li>
+        <li>EKF 不直接参与 A* 规划，也不改变参考轨迹；它只改变控制器看到的反馈状态 <code>state_for_ctrl</code>。</li>
+        <li>A* 场景只是在场景构建阶段生成 <code>ref.points</code>；闭环里 MPC 只是跟踪这条参考轨迹。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>改进后的流程图</h2>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 1760 1180" role="img" aria-label="A* 规划 + MPC 闭环数据流精确版">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#8fa0b2"></path>
+            </marker>
+          </defs>
+
+          <rect class="group scene-group" x="40" y="40" width="520" height="640"></rect>
+          <text class="group-title" x="62" y="72">一、场景构建阶段：生成参考轨迹</text>
+
+          <g class="node scene" transform="translate(80 110)">
+            <rect width="200" height="88"></rect>
+            <text class="title" x="16" y="25">定义障碍物</text>
+            <text class="fn" x="16" y="48">obstacles</text>
+            <text class="body" x="16" y="70">[(cx, cy, r), ...]</text>
+          </g>
+
+          <g class="node scene" transform="translate(320 110)">
+            <rect width="200" height="88"></rect>
+            <text class="title" x="16" y="25">构建占据栅格</text>
+            <text class="fn" x="16" y="48">OccupancyGrid</text>
+            <text class="body" x="16" y="70">grid: 0 free, 1 occupied</text>
+          </g>
+
+          <g class="node scene" transform="translate(80 250)">
+            <rect width="200" height="92"></rect>
+            <text class="title" x="16" y="25">膨胀障碍物</text>
+            <text class="fn" x="16" y="48">gm.add_circles()</text>
+            <text class="body" x="16" y="70">r_eff = r + r_inflate</text>
+            <text class="body" x="16" y="88">车辆半径 + 安全余量</text>
+          </g>
+
+          <g class="node scene" transform="translate(320 250)">
+            <rect width="200" height="92"></rect>
+            <text class="title" x="16" y="25">A* 搜索折线路径</text>
+            <text class="fn" x="16" y="48">astar(gm, start, goal)</text>
+            <text class="body" x="16" y="70">8 邻域 + 欧氏启发</text>
+            <text class="body" x="16" y="88">输出 raw_path</text>
+          </g>
+
+          <g class="node scene" transform="translate(80 395)">
+            <rect width="200" height="92"></rect>
+            <text class="title" x="16" y="25">平滑路径</text>
+            <text class="fn" x="16" y="48">smooth_path()</text>
+            <text class="body" x="16" y="70">B-spline + 等弧长采样</text>
+            <text class="body" x="16" y="88">输出 smooth_xy</text>
+          </g>
+
+          <g class="node scene" transform="translate(320 395)">
+            <rect width="200" height="112"></rect>
+            <text class="title" x="16" y="25">生成参考轨迹</text>
+            <text class="fn" x="16" y="48">generate_from_waypoints()</text>
+            <text class="body" x="16" y="70">补 phi / v / kappa / s</text>
+            <text class="body" x="16" y="88">输出 ref.points</text>
+            <text class="small" x="16" y="106">每行: [x,y,phi,v,kappa,s]</text>
+          </g>
+
+          <g class="node scene" transform="translate(170 565)">
+            <rect width="260" height="74"></rect>
+            <text class="title" x="16" y="25">场景对象</text>
+            <text class="fn" x="16" y="48">Scenario(ref, init_state, obstacles)</text>
+            <text class="body" x="16" y="66">交给 run_case / run_simulation</text>
+          </g>
+
+          <path class="edge" d="M280 154 C300 154 300 154 320 154"></path>
+          <g class="edge-label" transform="translate(272 72)">
+            <rect width="84" height="24"></rect>
+            <text x="8" y="16">obstacles</text>
+          </g>
+
+          <path class="edge" d="M420 198 C420 224 250 224 180 250"></path>
+          <g class="edge-label" transform="translate(286 205)">
+            <rect width="72" height="24"></rect>
+            <text x="8" y="16">grid_map</text>
+          </g>
+
+          <path class="edge" d="M280 296 C300 296 300 296 320 296"></path>
+          <g class="edge-label" transform="translate(272 212)">
+            <rect width="112" height="24"></rect>
+            <text x="8" y="16">inflated grid</text>
+          </g>
+
+          <path class="edge" d="M420 342 C420 372 210 372 180 395"></path>
+          <g class="edge-label" transform="translate(286 350)">
+            <rect width="72" height="24"></rect>
+            <text x="8" y="16">raw_path</text>
+          </g>
+
+          <path class="edge" d="M280 441 C300 441 300 451 320 451"></path>
+          <g class="edge-label" transform="translate(268 350)">
+            <rect width="84" height="24"></rect>
+            <text x="8" y="16">smooth_xy</text>
+          </g>
+
+          <path class="edge" d="M420 507 C420 540 330 548 300 565"></path>
+          <g class="edge-label" transform="translate(354 522)">
+            <rect width="84" height="24"></rect>
+            <text x="8" y="16">ref.points</text>
+          </g>
+
+          <rect class="group mpc-group" x="620" y="40" width="1040" height="250"></rect>
+          <text class="group-title" x="642" y="72">二、MPCController 初始化阶段：只构建一次 QP 结构</text>
+
+          <g class="node mpc" transform="translate(660 110)">
+            <rect width="250" height="120"></rect>
+            <text class="title" x="16" y="25">创建 MPC 控制器</text>
+            <text class="fn" x="16" y="48">MPCController.__init__()</text>
+            <text class="body" x="16" y="70">设置 N / Q / R / 约束上限</text>
+            <text class="body" x="16" y="88">归一化 obstacles</text>
+            <text class="body" x="16" y="106">保存 warm-start 缓存</text>
+          </g>
+
+          <g class="node mpc" transform="translate(1040 100)">
+            <rect width="270" height="144"></rect>
+            <text class="title" x="16" y="25">构建参数化 QP</text>
+            <text class="fn" x="16" y="48">_build_problem()</text>
+            <text class="body" x="16" y="70">变量: x_var[0:N], u_var[0:N-1]</text>
+            <text class="body" x="16" y="88">参数: x0_p, x_ref_p, u_ref_p</text>
+            <text class="body" x="16" y="106">参数: A_p, B_p, c_p, u_prev_p</text>
+            <text class="body" x="16" y="124">可选: n_p, b_p, slack</text>
+            <text class="small" x="16" y="140">之后每拍只填参数 + solve</text>
+          </g>
+
+          <g class="node mpc" transform="translate(1410 110)">
+            <rect width="210" height="120"></rect>
+            <text class="title" x="16" y="25">控制器对象</text>
+            <text class="fn" x="16" y="48">controller</text>
+            <text class="body" x="16" y="70">传入 run_simulation()</text>
+            <text class="body" x="16" y="88">每拍调用 solve()</text>
+            <text class="body" x="16" y="106">QP 结构复用</text>
+          </g>
+
+          <path class="edge" d="M910 170 C954 170 996 170 1040 170"></path>
+          <g class="edge-label" transform="translate(936 132)">
+            <rect width="84" height="24"></rect>
+            <text x="8" y="16">N,Q,R,...</text>
+          </g>
+
+          <path class="edge" d="M1310 170 C1345 170 1375 170 1410 170"></path>
+          <g class="edge-label" transform="translate(1328 72)">
+            <rect width="82" height="24"></rect>
+            <text x="8" y="16">QP problem</text>
+          </g>
+
+          <rect class="group loop-group" x="620" y="340" width="1040" height="760"></rect>
+          <text class="group-title" x="642" y="372">三、闭环仿真阶段：for step in range(max_steps)，每一拍重复</text>
+
+          <g class="node loop" transform="translate(660 420)">
+            <rect width="240" height="110"></rect>
+            <text class="title" x="16" y="25">选择控制器反馈状态</text>
+            <text class="fn" x="16" y="48">state_for_ctrl</text>
+            <text class="body" x="16" y="70">无 EKF: state</text>
+            <text class="body" x="16" y="88">有 EKF: estimator.state()</text>
+            <text class="small" x="16" y="104">用于找最近点和控制求解</text>
+          </g>
+
+          <g class="node loop" transform="translate(990 420)">
+            <rect width="240" height="110"></rect>
+            <text class="title" x="16" y="25">寻找最近参考点</text>
+            <text class="fn" x="16" y="48">ref.find_nearest()</text>
+            <text class="body" x="16" y="70">输入 state_for_ctrl[0:2]</text>
+            <text class="body" x="16" y="88">结合 last_idx 限制搜索窗口</text>
+            <text class="body" x="16" y="106">输出 nearest_idx</text>
+          </g>
+
+          <g class="node mpc" transform="translate(1320 395)">
+            <rect width="290" height="160"></rect>
+            <text class="title" x="16" y="25">MPC 单拍求解</text>
+            <text class="fn" x="16" y="48">controller.solve(...)</text>
+            <text class="body" x="16" y="70">1. get_reference_window_by_time()</text>
+            <text class="body" x="16" y="88">2. delta_ref = atan(L*kappa)</text>
+            <text class="body" x="16" y="106">3. linearize() 得 A/B/c</text>
+            <text class="body" x="16" y="124">4. 更新 Parameter.value</text>
+            <text class="body" x="16" y="142">5. prob.solve(OSQP)</text>
+            <text class="body" x="16" y="158">输出 u_opt, info</text>
+          </g>
+
+          <g class="node loop" transform="translate(1320 630)">
+            <rect width="290" height="92"></rect>
+            <text class="title" x="16" y="25">推进车辆真值</text>
+            <text class="fn" x="16" y="48">car.step(state, u_opt)</text>
+            <text class="body" x="16" y="70">输出下一拍真实状态 state</text>
+          </g>
+
+          <g class="node ekf" transform="translate(990 630)">
+            <rect width="240" height="126"></rect>
+            <text class="title" x="16" y="25">状态估计可选</text>
+            <text class="fn" x="16" y="48">EKF predict / update</text>
+            <text class="body" x="16" y="70">predict(u_opt)</text>
+            <text class="body" x="16" y="88">sensors.measure(state)</text>
+            <text class="body" x="16" y="106">update_gps / update_wheel</text>
+            <text class="body" x="16" y="124">输出下一拍 estimate</text>
+          </g>
+
+          <g class="node out" transform="translate(660 650)">
+            <rect width="240" height="88"></rect>
+            <text class="title" x="16" y="25">记录并进入下一拍</text>
+            <text class="fn" x="16" y="48">hist[...]</text>
+            <text class="body" x="16" y="70">state / u / ref_idx / info</text>
+          </g>
+
+          <path class="edge" d="M430 602 C520 602 565 470 660 470"></path>
+          <g class="edge-label" transform="translate(505 555)">
+            <rect width="152" height="24"></rect>
+            <text x="8" y="16">ref, init_state, obstacles</text>
+          </g>
+
+          <path class="edge" d="M1620 170 C1680 265 1605 360 1530 395"></path>
+          <g class="edge-label" transform="translate(1565 300)">
+            <rect width="74" height="24"></rect>
+            <text x="8" y="16">controller</text>
+          </g>
+
+          <path class="edge" d="M900 475 C930 475 960 475 990 475"></path>
+          <g class="edge-label" transform="translate(913 382)">
+            <rect width="146" height="24"></rect>
+            <text x="8" y="16">state_for_ctrl[0:2]</text>
+          </g>
+
+          <path class="edge" d="M1230 475 C1260 475 1290 475 1320 475"></path>
+          <g class="edge-label" transform="translate(1242 350)">
+            <rect width="194" height="24"></rect>
+            <text x="8" y="16">state_for_ctrl, ref, nearest_idx</text>
+          </g>
+
+          <path class="edge" d="M1465 555 C1465 585 1465 600 1465 630"></path>
+          <g class="edge-label" transform="translate(1480 586)">
+            <rect width="50" height="24"></rect>
+            <text x="8" y="16">u_opt</text>
+          </g>
+
+          <path class="edge" d="M1320 680 C1290 680 1260 688 1230 696"></path>
+          <g class="edge-label" transform="translate(1246 588)">
+            <rect width="82" height="24"></rect>
+            <text x="8" y="16">state truth</text>
+          </g>
+
+          <path class="edge" d="M990 700 C960 700 930 700 900 700"></path>
+          <g class="edge-label" transform="translate(908 770)">
+            <rect width="100" height="24"></rect>
+            <text x="8" y="16">estimate 可选</text>
+          </g>
+
+          <path class="edge" d="M660 705 C610 790 610 865 720 920 C915 1010 1460 1015 1465 722"></path>
+          <g class="edge-label" transform="translate(945 980)">
+            <rect width="150" height="24"></rect>
+            <text x="8" y="16">下一拍 state / estimate</text>
+          </g>
+
+          <g class="node mpc" transform="translate(1320 815)">
+            <rect width="290" height="180"></rect>
+            <text class="title" x="16" y="25">MPC 求解中的关键变量</text>
+            <text class="body" x="16" y="52">ref_window_full: [x,y,phi,v,kappa,s]</text>
+            <text class="body" x="16" y="74">x_ref_window = ref_window_full[:, :4]</text>
+            <text class="body" x="16" y="96">u_ref_window = [0, atan(L*kappa)]</text>
+            <text class="body" x="16" y="118">A/B/c = linearize(x_ref[k], u_ref[k])</text>
+            <text class="body" x="16" y="140">x0_p = state_for_ctrl</text>
+            <text class="body" x="16" y="162">u_prev_p = 上一拍实际 u</text>
+          </g>
+
+          <path class="edge" d="M1465 555 C1580 620 1640 760 1535 815"></path>
+          <g class="edge-label" transform="translate(1580 760)">
+            <rect width="116" height="24"></rect>
+            <text x="8" y="16">内部参数更新</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

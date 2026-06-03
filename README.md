@@ -6,6 +6,15 @@
 
 > 上图：A\* 全局规划 + B-spline 平滑 + EKF 状态估计 + MPC 闭环跟踪，全 pipeline 联动。
 
+## 项目亮点
+
+- 🚗 **MPC 核心**：cvxpy 参数化 QP + OSQP warm-start，单步 ~5-15 ms；参考窗口按时间取 + `δ_ref = arctan(L·κ)` 前馈，QP 只解扰动
+- 📊 **三控制器对比**：MPC / PID(Stanley+PI) / LQR(误差状态+DARE) 在 8 个场景下量化对比跟踪性能
+- 🛰️ **EKF 多速率融合**：GPS 5 Hz + 轮速 10 Hz 异步融合，估计误差 < 0.3 m
+- 🗺️ **A\* + B-spline 规划**：8 邻域 A\*（膨胀栅格）+ B-spline 平滑 + 等弧长重采样生成参考
+- 🚧 **MPC 避障**：半空间硬约束 / 二次惩罚软约束双模式 + 动态障碍不确定性锥（SCP 思想，每步重线性化）
+- 🤖 **扩展实验**：tabular Q-learning 循迹（复用同一车辆模型），经典控制 + 学习方法对照
+
 ## 项目目的
 
 把"纯 MPC 跟踪 demo"演化为一个能演示完整自动驾驶 pipeline 的 Python 仿真。
@@ -16,6 +25,29 @@
 - **规划层**：A\* 全局规划 + B-spline 平滑生成参考
 - **决策层**：MPC 加避障约束（半空间硬约束 / 二次惩罚软约束两种）
 - **障碍**：静态圆障碍 + 动态恒速障碍 + 不确定性锥
+
+## 系统架构
+
+完整的"规划 → 估计 → 控制 → 避障"闭环 pipeline，各层解耦、按场景按需启用：
+
+```mermaid
+flowchart LR
+    subgraph PLAN["规划层 planning/"]
+        ASTAR["A* 全局规划"] --> SMOOTH["B-spline 平滑"]
+    end
+    SMOOTH --> REF["参考轨迹<br/>core/reference_trajectory"]
+    OBS["静/动障碍<br/>obstacles/"] -. MPC 避障约束 .-> CTRL
+    REF --> CTRL["控制器<br/>MPC / PID / LQR"]
+    SENS["传感器<br/>GPS + 轮速"] --> EKF["EKF 状态估计<br/>estimation/"]
+    EKF -- 状态估计 --> CTRL
+    CTRL -- 控制量 a, δ --> VEH["车辆模型<br/>core/vehicle_model"]
+    VEH -- 真值闭环 --> SENS
+    VEH --> VIZ["可视化 / 动画<br/>viz/"]
+    EKF --> VIZ
+    CTRL --> VIZ
+```
+
+> 模块依赖与完整调用链见 [STRUCTURE.md](STRUCTURE.md)。
 
 ## 快速开始
 
@@ -34,6 +66,8 @@ python main.py --case astar --ekf --mpc-avoid --no-show
 输出图保存在当前目录（或用 `--save-dir <dir>` 指定）。完整 CLI 见下方。
 
 ## 核心思路 / 算法
+
+> 📈 交互式流程图（浏览器打开）：[MPC 求解流程](docs/mpc_flow.html) · [A\* + MPC 精确联动](docs/astar_mpc_precise.html)
 
 ### 车辆模型
 后轴中心运动学自行车：
@@ -105,6 +139,25 @@ cvxpy DPP 限制：`Parameter @ Parameter` 不允许，所以 `b_k = r_safe + n�
 | A\* + EKF 全 pipeline | ![astar_ekf](results/animations/astar_ekf.gif) |
 
 更多控制器对比图、规划/避障对比图见 [`results/`](results/) 目录。
+
+## 扩展实验：强化学习循迹
+
+在经典控制（MPC / PID / LQR）之外，额外做了一个**最小化的 tabular Q-learning** 智能体来学习直线循迹，演示"学习方法"思路。它**复用同一套 `core/` 车辆模型与参考轨迹**，因此和上面的控制器处在同一物理环境下（刻意写小、不依赖 Gym，方便读懂 RL 主循环）。
+
+- **状态**：把横向 / 航向 / 速度误差 `(e_lat, e_phi, e_v)` 离散分箱成 Q 表索引
+- **动作**：7 档离散转向（速度由内置简单环维持），奖励对跟踪误差整形
+- **结果**：reward 曲线收敛、策略热力图、不同 episode 数对比
+
+| reward 曲线 | 策略热力图 | 循迹效果 |
+|---|---|---|
+| ![reward](rl/results/q_learning_reward_curve.png) | ![policy](rl/results/q_learning_policy_heatmap.png) | ![track](rl/results/q_learning_line_tracking.png) |
+
+```bash
+python -m rl.demo_q_learning                       # 训练 + 出图
+python -m rl.demo_q_learning --episodes 2000 --show
+```
+
+> 定位：这是教学性质的扩展实验，**不是项目主线**；主线仍是 MPC 决策-规划-控制-估计 pipeline。
 
 ## 如何运行
 

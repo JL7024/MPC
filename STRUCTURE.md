@@ -3,7 +3,7 @@
 ## 目录树
 
 ```
-improve/
+MPC/
 ├── main.py                          # 仿真入口 (CLI)
 ├── scenarios.py                     # 8 个内置场景的工厂函数 + 注册表
 ├── compare.py                       # 多控制器对比脚本 (MPC vs PID vs LQR)
@@ -45,6 +45,17 @@ improve/
 │   ├── plot_estimation.py           # EKF 估计误差 4 面板图
 │   ├── plot_planning.py             # A* 规划层叠图
 │   └── plot_avoidance.py            # 避障 XY + min_dist 时间序列
+│
+├── rl/                              # 扩展实验: tabular Q-learning 循迹 (复用 core/)
+│   ├── line_tracking_env.py         # 离散化直线循迹环境
+│   ├── q_learning.py                # Q-learning 训练 + rollout
+│   ├── demo_q_learning.py           # 训练 + 出图 demo
+│   ├── compare_episode_counts.py    # 不同 episode 数对比
+│   └── results/                     # reward 曲线 / 策略热力图
+│
+├── docs/                            # 交互式流程图 (HTML, 浏览器打开)
+│   ├── mpc_flow.html
+│   └── astar_mpc_precise.html
 │
 ├── ROADMAP.md                       # 项目分阶段规划文档
 ├── baseline_metrics.json            # 5 个 baseline 场景的回归数值
@@ -122,6 +133,21 @@ improve/
 | `plot_estimation.py` | EKF 估计 vs 真值的 4 面板时间序列 (x/y/phi/v 各一格 + ±2σ 置信带 + 测量散点) | `plot_estimation_results(hist, dt, title, ...)` |
 | `plot_planning.py` | A* 规划层叠图：栅格 + 原始障碍圆 + 安全圈 + A* 折线 + B-spline 平滑路径 + 参考轨迹 + 车实际轨迹 | `plot_planning(scene, hist=None, ...)` |
 | `plot_avoidance.py` | 避障双面板：上 XY (静态 → 实心圆+r_safe虚线；动态 → 5 时间快照浅深渐变 + 障碍轨迹线) + 下 min_dist 时间序列 (含 r_safe(t) 不确定性锥包络) | `plot_avoidance(hist, ref, obstacles, dt, ...)` |
+
+### `rl/` —— 强化学习扩展（教学性质，非主线）
+
+最小化的 tabular Q-learning 循迹实验，**复用 `core/` 的车辆模型与参考轨迹**，与经典控制器处在同一物理环境下对照。刻意不依赖 Gym，便于读懂 RL 主循环。
+
+| 文件 | 职责 | 关键 API |
+|---|---|---|
+| `line_tracking_env.py` | 离散化直线循迹环境：误差 `(e_lat, e_phi, e_v)` 分箱成状态，7 档离散转向为动作 | `LineTrackingEnv.reset()`, `.step(action)` |
+| `q_learning.py` | Q-learning 训练 + 贪心 rollout 评估 | `train_q_learning(...)`, `rollout(...)` |
+| `demo_q_learning.py` | 训练 + 出 reward 曲线 / 策略热力图 / 循迹图 | `python -m rl.demo_q_learning` |
+| `compare_episode_counts.py` | 不同 episode 数收敛对比 | `python -m rl.compare_episode_counts` |
+
+### `docs/` —— 交互式流程图
+
+`mpc_flow.html` / `astar_mpc_precise.html` 两个独立 HTML，浏览器打开可看 MPC 求解与 A\*+MPC 联动流程，供 README / 面试讲解配图用。
 
 ---
 

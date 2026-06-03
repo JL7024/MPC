@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPC 项目数据流流程图</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --ink: #17202a;
+      --muted: #5d6875;
+      --line: #8fa0b2;
+      --node-border: #c7d0da;
+      --blue: #dbeafe;
+      --blue-border: #5b8def;
+      --green: #dcfce7;
+      --green-border: #3aa867;
+      --amber: #fff3cd;
+      --amber-border: #d39e00;
+      --violet: #ede9fe;
+      --violet-border: #8b5cf6;
+      --red: #fee2e2;
+      --red-border: #d96b6b;
+      --panel: #fbfcfe;
+      --code: #eef1f5;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      line-height: 1.55;
+    }
+
+    header {
+      padding: 24px 32px 12px;
+      background: #fff;
+      border-bottom: 1px solid #dfe4ea;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 980px;
+    }
+
+    main { padding: 24px 32px 40px; }
+
+    section {
+      margin: 0 0 28px;
+      padding: 20px;
+      background: #fff;
+      border: 1px solid #dfe4ea;
+      border-radius: 8px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .note {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .diagram-wrap {
+      overflow: auto;
+      border: 1px solid #e5e9ef;
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    svg {
+      display: block;
+      min-width: 1180px;
+      width: 100%;
+      height: auto;
+    }
+
+    .node rect {
+      fill: #fff;
+      stroke: var(--node-border);
+      stroke-width: 1.4;
+      rx: 8;
+    }
+
+    .node.scene rect { fill: var(--blue); stroke: var(--blue-border); }
+    .node.loop rect { fill: var(--green); stroke: var(--green-border); }
+    .node.mpc rect { fill: var(--amber); stroke: var(--amber-border); }
+    .node.ekf rect { fill: var(--violet); stroke: var(--violet-border); }
+    .node.output rect { fill: var(--red); stroke: var(--red-border); }
+
+    .title-text {
+      font-size: 15px;
+      font-weight: 700;
+      fill: var(--ink);
+    }
+
+    .body-text {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .fn-text {
+      font-size: 12px;
+      fill: #344052;
+      font-family: Consolas, "Cascadia Mono", monospace;
+    }
+
+    .edge {
+      stroke: var(--line);
+      stroke-width: 1.6;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .edge2 {
+      stroke: var(--line);
+      stroke-width: 1.6;
+      fill: none;
+      marker-end: url(#arrow2);
+    }
+
+    .edge3 {
+      stroke: var(--line);
+      stroke-width: 1.6;
+      fill: none;
+      marker-end: url(#arrow3);
+    }
+
+    .edge-label { pointer-events: none; }
+
+    .edge-label rect {
+      fill: #fff;
+      stroke: #d8dee7;
+      rx: 5;
+    }
+
+    .edge-label text {
+      font-size: 12px;
+      fill: #344052;
+      font-family: Consolas, "Cascadia Mono", monospace;
+    }
+
+    .loop-box {
+      fill: rgba(220, 252, 231, 0.28);
+      stroke: #2f9e5f;
+      stroke-width: 1.8;
+      stroke-dasharray: 9 7;
+      rx: 12;
+    }
+
+    .loop-title {
+      font-size: 15px;
+      font-weight: 700;
+      fill: #17663a;
+    }
+
+    code {
+      padding: 2px 5px;
+      background: var(--code);
+      border-radius: 4px;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.95em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid #dfe4ea;
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f1f4f8;
+      font-weight: 700;
+    }
+
+    .formula {
+      margin: 12px 0 0;
+      padding: 12px;
+      background: #f8fafc;
+      border: 1px solid #e1e6ee;
+      border-radius: 8px;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MPC 项目数据流流程图</h1>
+    <p class="subtitle">
+      每个块用中文作用做标题，函数名放在块内；箭头标签表示实际传递的变量。
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>1. 场景生成到闭环仿真</h2>
+      <p class="note">
+        对应 <code>main.py::run_case()</code> 到 <code>main.py::run_simulation()</code>。虚线框内部是每一拍循环。
+      </p>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 1320 780" role="img" aria-label="场景生成到闭环仿真流程图">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#8fa0b2"></path>
+            </marker>
+          </defs>
+
+          <g class="node scene" transform="translate(50 56)">
+            <rect width="210" height="92"></rect>
+            <text class="title-text" x="16" y="25">生成场景</text>
+            <text class="fn-text" x="16" y="48">scene_fn()</text>
+            <text class="body-text" x="16" y="70">例如 astar_scene / lane_scene</text>
+            <text class="body-text" x="16" y="88">输出 Scenario 对象</text>
+          </g>
+
+          <g class="node scene" transform="translate(335 56)">
+            <rect width="250" height="104"></rect>
+            <text class="title-text" x="16" y="25">场景数据</text>
+            <text class="fn-text" x="16" y="48">scenario</text>
+            <text class="body-text" x="16" y="70">ref: 参考轨迹对象</text>
+            <text class="body-text" x="16" y="88">init_state: 初始真值状态</text>
+            <text class="body-text" x="16" y="106">obstacles: 可选障碍物</text>
+          </g>
+
+          <g class="node loop" transform="translate(680 40)">
+            <rect width="240" height="92"></rect>
+            <text class="title-text" x="16" y="25">初始化真值状态</text>
+            <text class="fn-text" x="16" y="48">car.reset(*init_state)</text>
+            <text class="body-text" x="16" y="70">设置车辆初始状态</text>
+            <text class="body-text" x="16" y="88">输出 state</text>
+          </g>
+
+          <g class="node mpc" transform="translate(680 164)">
+            <rect width="240" height="104"></rect>
+            <text class="title-text" x="16" y="25">创建控制器</text>
+            <text class="fn-text" x="16" y="48">make_controller()</text>
+            <text class="body-text" x="16" y="70">选择 MPC / PID / LQR</text>
+            <text class="body-text" x="16" y="88">MPC 初始化时构建 QP</text>
+            <text class="body-text" x="16" y="106">输出 controller</text>
+          </g>
+
+          <g class="node loop" transform="translate(1030 92)">
+            <rect width="220" height="104"></rect>
+            <text class="title-text" x="16" y="25">进入闭环仿真</text>
+            <text class="fn-text" x="16" y="48">run_simulation()</text>
+            <text class="body-text" x="16" y="70">接收 state / ref / controller</text>
+            <text class="body-text" x="16" y="88">启动逐拍循环</text>
+            <text class="body-text" x="16" y="106">最终输出 hist</text>
+          </g>
+
+          <rect class="loop-box" x="60" y="320" width="1200" height="400"></rect>
+          <text class="loop-title" x="84" y="350">for step in range(max_steps)：每一拍闭环循环</text>
+
+          <g class="node loop" transform="translate(100 390)">
+            <rect width="220" height="104"></rect>
+            <text class="title-text" x="16" y="25">选择反馈状态</text>
+            <text class="fn-text" x="16" y="48">state_for_ctrl</text>
+            <text class="body-text" x="16" y="70">无 EKF: state</text>
+            <text class="body-text" x="16" y="88">有 EKF: estimator.state()</text>
+          </g>
+
+          <g class="node loop" transform="translate(390 390)">
+            <rect width="220" height="104"></rect>
+            <text class="title-text" x="16" y="25">寻找最近参考点</text>
+            <text class="fn-text" x="16" y="48">ref.find_nearest()</text>
+            <text class="body-text" x="16" y="70">输入当前 x, y</text>
+            <text class="body-text" x="16" y="88">输出 nearest_idx</text>
+          </g>
+
+          <g class="node mpc" transform="translate(680 390)">
+            <rect width="240" height="104"></rect>
+            <text class="title-text" x="16" y="25">求解一步控制</text>
+            <text class="fn-text" x="16" y="48">controller.solve()</text>
+            <text class="body-text" x="16" y="70">MPC 内部见第 2 张图</text>
+            <text class="body-text" x="16" y="88">输出 u_opt, info</text>
+          </g>
+
+          <g class="node ekf" transform="translate(995 390)">
+            <rect width="220" height="124"></rect>
+            <text class="title-text" x="16" y="25">状态估计可选</text>
+            <text class="fn-text" x="16" y="48">EKF predict/update</text>
+            <text class="body-text" x="16" y="70">predict(u_opt)</text>
+            <text class="body-text" x="16" y="88">sensors.measure(state)</text>
+            <text class="body-text" x="16" y="106">GPS / wheel update</text>
+          </g>
+
+          <g class="node loop" transform="translate(680 585)">
+            <rect width="240" height="82"></rect>
+            <text class="title-text" x="16" y="25">推进车辆真值</text>
+            <text class="fn-text" x="16" y="48">car.step(state, u_opt)</text>
+            <text class="body-text" x="16" y="70">输出下一拍 state</text>
+          </g>
+
+          <g class="node output" transform="translate(995 585)">
+            <rect width="220" height="82"></rect>
+            <text class="title-text" x="16" y="25">记录历史数据</text>
+            <text class="fn-text" x="16" y="48">hist[...]</text>
+            <text class="body-text" x="16" y="70">state / u / info / ref_idx</text>
+          </g>
+
+          <path class="edge" d="M260 102 C292 102 305 108 335 108"></path>
+          <g class="edge-label" transform="translate(274 74)">
+            <rect width="58" height="24"></rect>
+            <text x="9" y="16">scenario</text>
+          </g>
+
+          <path class="edge" d="M585 90 C620 78 642 80 680 82"></path>
+          <g class="edge-label" transform="translate(606 50)">
+            <rect width="72" height="24"></rect>
+            <text x="8" y="16">init_state</text>
+          </g>
+
+          <path class="edge" d="M585 132 C632 166 632 210 680 216"></path>
+          <g class="edge-label" transform="translate(588 136)">
+            <rect width="86" height="24"></rect>
+            <text x="8" y="16">ref, obstacles</text>
+          </g>
+
+          <path class="edge" d="M920 88 C964 88 990 110 1030 124"></path>
+          <g class="edge-label" transform="translate(952 76)">
+            <rect width="44" height="24"></rect>
+            <text x="8" y="16">state</text>
+          </g>
+
+          <path class="edge" d="M920 216 C970 216 994 174 1030 152"></path>
+          <g class="edge-label" transform="translate(955 204)">
+            <rect width="74" height="24"></rect>
+            <text x="8" y="16">controller</text>
+          </g>
+
+          <path class="edge" d="M1140 196 C1135 270 260 280 210 390"></path>
+          <g class="edge-label" transform="translate(555 292)">
+            <rect width="162" height="24"></rect>
+            <text x="8" y="16">state, ref, controller</text>
+          </g>
+
+          <path class="edge" d="M320 442 C348 442 362 442 390 442"></path>
+          <g class="edge-label" transform="translate(300 356)">
+            <rect width="146" height="24"></rect>
+            <text x="8" y="16">state_for_ctrl[0:2]</text>
+          </g>
+
+          <path class="edge" d="M610 442 C640 442 650 442 680 442"></path>
+          <g class="edge-label" transform="translate(610 356)">
+            <rect width="124" height="24"></rect>
+            <text x="8" y="16">nearest_idx, ref</text>
+          </g>
+
+          <path class="edge" d="M920 442 C950 442 965 442 995 442"></path>
+          <g class="edge-label" transform="translate(937 408)">
+            <rect width="50" height="24"></rect>
+            <text x="8" y="16">u_opt</text>
+          </g>
+
+          <path class="edge" d="M800 494 C800 525 800 552 800 585"></path>
+          <g class="edge-label" transform="translate(814 532)">
+            <rect width="50" height="24"></rect>
+            <text x="8" y="16">u_opt</text>
+          </g>
+
+          <path class="edge" d="M920 625 C950 625 965 625 995 625"></path>
+          <g class="edge-label" transform="translate(930 540)">
+            <rect width="98" height="24"></rect>
+            <text x="8" y="16">state, u, info</text>
+          </g>
+
+          <path class="edge" d="M1105 514 C1105 548 1105 555 1105 585"></path>
+          <g class="edge-label" transform="translate(1122 538)">
+            <rect width="74" height="24"></rect>
+            <text x="8" y="16">estimate</text>
+          </g>
+
+          <path class="edge" d="M680 626 C460 704 180 675 160 494"></path>
+          <g class="edge-label" transform="translate(350 668)">
+            <rect width="76" height="24"></rect>
+            <text x="8" y="16">next state</text>
+          </g>
+
+          <path class="edge" d="M1000 640 C835 735 240 735 210 494"></path>
+          <g class="edge-label" transform="translate(684 705)">
+            <rect width="96" height="24"></rect>
+            <text x="8" y="16">next estimate</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. MPC 单拍求解内部</h2>
+      <p class="note">
+        对应 <code>controllers/mpc.py::solve()</code>。这里展示一次 <code>solve()</code> 内部怎样更新参数并调用 OSQP。
+      </p>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 1320 760" role="img" aria-label="MPC 单拍求解内部流程图">
+          <defs>
+            <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#8fa0b2"></path>
+            </marker>
+          </defs>
+
+          <g class="node mpc" transform="translate(50 64)">
+            <rect width="260" height="108"></rect>
+            <text class="title-text" x="16" y="25">单拍求解入口</text>
+            <text class="fn-text" x="16" y="48">solve(state, ref, nearest_idx, u_prev)</text>
+            <text class="body-text" x="16" y="70">state: 当前反馈状态</text>
+            <text class="body-text" x="16" y="88">u_prev: 上一拍实际控制</text>
+            <text class="body-text" x="16" y="106">输出 u0, info</text>
+          </g>
+
+          <g class="node mpc" transform="translate(390 64)">
+            <rect width="260" height="108"></rect>
+            <text class="title-text" x="16" y="25">按时间取参考窗口</text>
+            <text class="fn-text" x="16" y="48">get_reference_window_by_time()</text>
+            <text class="body-text" x="16" y="70">从 nearest_idx 开始</text>
+            <text class="body-text" x="16" y="88">按 v_ref * dt 推进</text>
+            <text class="body-text" x="16" y="106">输出 ref_window_full</text>
+          </g>
+
+          <g class="node mpc" transform="translate(730 52)">
+            <rect width="230" height="96"></rect>
+            <text class="title-text" x="16" y="25">拆分参考状态</text>
+            <text class="fn-text" x="16" y="48">slice ref_window_full</text>
+            <text class="body-text" x="16" y="70">x_ref_window = 前 4 列</text>
+            <text class="body-text" x="16" y="88">kappa_ref = 曲率列</text>
+          </g>
+
+          <g class="node mpc" transform="translate(730 205)">
+            <rect width="230" height="92"></rect>
+            <text class="title-text" x="16" y="25">反推参考控制</text>
+            <text class="fn-text" x="16" y="48">delta_ref = atan(L*kappa)</text>
+            <text class="body-text" x="16" y="70">a_ref = 0</text>
+            <text class="body-text" x="16" y="88">输出 u_ref_window</text>
+          </g>
+
+          <g class="node mpc" transform="translate(390 285)">
+            <rect width="260" height="98"></rect>
+            <text class="title-text" x="16" y="25">更新 QP 参数</text>
+            <text class="fn-text" x="16" y="48">cvxpy Parameter.value</text>
+            <text class="body-text" x="16" y="70">x0_p, x_ref_p, u_ref_p</text>
+            <text class="body-text" x="16" y="88">u_prev_p</text>
+          </g>
+
+          <g class="node mpc" transform="translate(50 285)">
+            <rect width="260" height="98"></rect>
+            <text class="title-text" x="16" y="25">线性化车辆模型</text>
+            <text class="fn-text" x="16" y="48">VehicleModel.linearize()</text>
+            <text class="body-text" x="16" y="70">输入 x_ref[k], u_ref[k]</text>
+            <text class="body-text" x="16" y="88">输出 A_k, B_k, c_k</text>
+          </g>
+
+          <g class="node mpc" transform="translate(50 470)">
+            <rect width="260" height="88"></rect>
+            <text class="title-text" x="16" y="25">更新动力学约束</text>
+            <text class="fn-text" x="16" y="48">A_p[k], B_p[k], c_p[k]</text>
+            <text class="body-text" x="16" y="70">x[k+1] = A x[k] + B u[k] + c</text>
+          </g>
+
+          <g class="node mpc" transform="translate(390 470)">
+            <rect width="260" height="88"></rect>
+            <text class="title-text" x="16" y="25">更新避障约束可选</text>
+            <text class="fn-text" x="16" y="48">_update_avoidance_params()</text>
+            <text class="body-text" x="16" y="70">输出 n_p, b_p</text>
+          </g>
+
+          <g class="node mpc" transform="translate(730 470)">
+            <rect width="230" height="88"></rect>
+            <text class="title-text" x="16" y="25">求解 QP</text>
+            <text class="fn-text" x="16" y="48">prob.solve(OSQP)</text>
+            <text class="body-text" x="16" y="70">输出 u_var, x_var</text>
+          </g>
+
+          <g class="node output" transform="translate(1040 470)">
+            <rect width="230" height="88"></rect>
+            <text class="title-text" x="16" y="25">返回首个控制量</text>
+            <text class="fn-text" x="16" y="48">u0 = u_var.value[0]</text>
+            <text class="body-text" x="16" y="70">只执行预测序列第一步</text>
+          </g>
+
+          <path class="edge2" d="M310 118 C340 118 360 118 390 118"></path>
+          <g class="edge-label" transform="translate(320 28)">
+            <rect width="132" height="24"></rect>
+            <text x="8" y="16">ref, nearest_idx</text>
+          </g>
+
+          <path class="edge2" d="M650 118 C680 118 700 112 730 105"></path>
+          <g class="edge-label" transform="translate(660 18)">
+            <rect width="118" height="24"></rect>
+            <text x="8" y="16">ref_window_full</text>
+          </g>
+
+          <path class="edge2" d="M845 148 C845 170 845 184 845 205"></path>
+          <g class="edge-label" transform="translate(860 166)">
+            <rect width="74" height="24"></rect>
+            <text x="8" y="16">kappa_ref</text>
+          </g>
+
+          <path class="edge2" d="M730 252 C700 270 680 285 650 315"></path>
+          <g class="edge-label" transform="translate(970 238)">
+            <rect width="102" height="24"></rect>
+            <text x="8" y="16">u_ref_window</text>
+          </g>
+
+          <path class="edge2" d="M730 128 C665 165 660 238 650 300"></path>
+          <g class="edge-label" transform="translate(970 160)">
+            <rect width="112" height="24"></rect>
+            <text x="8" y="16">x_ref_window</text>
+          </g>
+
+          <path class="edge2" d="M180 172 C180 212 180 246 180 285"></path>
+          <g class="edge-label" transform="translate(195 210)">
+            <rect width="106" height="24"></rect>
+            <text x="8" y="16">state, u_prev</text>
+          </g>
+
+          <path class="edge2" d="M390 335 C360 335 340 335 310 335"></path>
+          <g class="edge-label" transform="translate(322 250)">
+            <rect width="146" height="24"></rect>
+            <text x="8" y="16">x_ref[k], u_ref[k]</text>
+          </g>
+
+          <path class="edge2" d="M180 383 C180 416 180 437 180 470"></path>
+          <g class="edge-label" transform="translate(195 420)">
+            <rect width="94" height="24"></rect>
+            <text x="8" y="16">A_k, B_k, c_k</text>
+          </g>
+
+          <path class="edge2" d="M310 514 C340 514 360 514 390 514"></path>
+          <g class="edge-label" transform="translate(318 432)">
+            <rect width="98" height="24"></rect>
+            <text x="8" y="16">obstacles 可选</text>
+          </g>
+
+          <path class="edge2" d="M650 514 C680 514 700 514 730 514"></path>
+          <g class="edge-label" transform="translate(662 432)">
+            <rect width="96" height="24"></rect>
+            <text x="8" y="16">QP parameters</text>
+          </g>
+
+          <path class="edge2" d="M960 514 C990 514 1010 514 1040 514"></path>
+          <g class="edge-label" transform="translate(975 432)">
+            <rect width="94" height="24"></rect>
+            <text x="8" y="16">u_var.value</text>
+          </g>
+        </svg>
+      </div>
+
+      <div class="formula">MPC 线性化约束：
+x_{k+1} ≈ A_k x_k + B_k u_k + c_k
+
+参考控制：
+delta_ref = atan(L * kappa_ref)
+a_ref = 0
+
+滚动时域：
+每拍求 u_0 ... u_{N-1}，只执行 u_0</div>
+    </section>
+
+    <section>
+      <h2>3. A* 场景的参考轨迹生成</h2>
+      <p class="note">
+        只有 A* 场景先做全局搜索。普通直线、圆、双移线等场景直接生成参考轨迹。
+      </p>
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 1320 320" role="img" aria-label="A* 场景参考轨迹生成流程图">
+          <defs>
+            <marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#8fa0b2"></path>
+            </marker>
+          </defs>
+
+          <g class="node scene" transform="translate(50 100)">
+            <rect width="185" height="92"></rect>
+            <text class="title-text" x="16" y="25">定义障碍物</text>
+            <text class="fn-text" x="16" y="48">obstacles</text>
+            <text class="body-text" x="16" y="70">[(cx, cy, r), ...]</text>
+            <text class="body-text" x="16" y="88">圆形障碍物</text>
+          </g>
+
+          <g class="node scene" transform="translate(310 100)">
+            <rect width="210" height="92"></rect>
+            <text class="title-text" x="16" y="25">构建占据栅格</text>
+            <text class="fn-text" x="16" y="48">OccupancyGrid</text>
+            <text class="body-text" x="16" y="70">grid: 0 free, 1 occupied</text>
+            <text class="body-text" x="16" y="88">障碍物已膨胀</text>
+          </g>
+
+          <g class="node scene" transform="translate(600 100)">
+            <rect width="190" height="92"></rect>
+            <text class="title-text" x="16" y="25">搜索全局路径</text>
+            <text class="fn-text" x="16" y="48">astar()</text>
+            <text class="body-text" x="16" y="70">8 邻域图搜索</text>
+            <text class="body-text" x="16" y="88">输出 raw_path</text>
+          </g>
+
+          <g class="node scene" transform="translate(860 100)">
+            <rect width="190" height="92"></rect>
+            <text class="title-text" x="16" y="25">平滑折线路径</text>
+            <text class="fn-text" x="16" y="48">smooth_path()</text>
+            <text class="body-text" x="16" y="70">B-spline 平滑</text>
+            <text class="body-text" x="16" y="88">输出 smooth_xy</text>
+          </g>
+
+          <g class="node scene" transform="translate(1120 100)">
+            <rect width="180" height="92"></rect>
+            <text class="title-text" x="16" y="25">生成参考轨迹</text>
+            <text class="fn-text" x="16" y="48">generate_from_waypoints()</text>
+            <text class="body-text" x="16" y="70">补 phi/v/kappa/s</text>
+            <text class="body-text" x="16" y="88">输出 ref.points</text>
+          </g>
+
+          <path class="edge3" d="M235 146 C260 146 285 146 310 146"></path>
+          <g class="edge-label" transform="translate(248 58)">
+            <rect width="92" height="24"></rect>
+            <text x="8" y="16">obstacles</text>
+          </g>
+
+          <path class="edge3" d="M520 146 C550 146 570 146 600 146"></path>
+          <g class="edge-label" transform="translate(535 58)">
+            <rect width="88" height="24"></rect>
+            <text x="8" y="16">grid_map</text>
+          </g>
+
+          <path class="edge3" d="M790 146 C820 146 830 146 860 146"></path>
+          <g class="edge-label" transform="translate(805 58)">
+            <rect width="72" height="24"></rect>
+            <text x="8" y="16">raw_path</text>
+          </g>
+
+          <path class="edge3" d="M1050 146 C1080 146 1090 146 1120 146"></path>
+          <g class="edge-label" transform="translate(1060 58)">
+            <rect width="84" height="24"></rect>
+            <text x="8" y="16">smooth_xy</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>函数名解释</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>函数 / 变量</th>
+            <th>作用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>scene_fn()</code></td>
+            <td>场景工厂函数。返回一个 <code>Scenario</code>，包含参考轨迹、初始状态和可选障碍物。</td>
+          </tr>
+          <tr>
+            <td><code>ReferenceTrajectory</code></td>
+            <td>参考轨迹对象。核心数据是 <code>ref.points</code>，每行是 <code>[x, y, phi, v, kappa, s]</code>。</td>
+          </tr>
+          <tr>
+            <td><code>find_nearest()</code></td>
+            <td>根据当前车辆位置 <code>x,y</code>，在参考轨迹上找最近点索引 <code>nearest_idx</code>。</td>
+          </tr>
+          <tr>
+            <td><code>get_reference_window_by_time()</code></td>
+            <td>从 <code>nearest_idx</code> 开始，按未来时间 <code>dt</code> 取 <code>N+1</code> 个参考状态。</td>
+          </tr>
+          <tr>
+            <td><code>linearize()</code></td>
+            <td>把非线性自行车模型在参考点附近一阶线性化，得到 <code>A_k, B_k, c_k</code>。</td>
+          </tr>
+          <tr>
+            <td><code>prob.solve(OSQP)</code></td>
+            <td>调用 OSQP 求解当前拍的二次规划 QP，输出未来控制序列。</td>
+          </tr>
+          <tr>
+            <td><code>car.step()</code></td>
+            <td>用当前控制 <code>u_opt</code> 推进车辆真值状态。</td>
+          </tr>
+          <tr>
+            <td><code>hist</code></td>
+            <td>仿真历史记录，包括真值状态、控制量、参考索引、求解时间、预测轨迹等。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

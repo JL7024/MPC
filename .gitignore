@@ -28,3 +28,14 @@ Thumbs.db
 # Generated outputs (keep results/ tracked if you want to show plots in README)
 # results/
 *.log
+
+# 根目录临时截图（注意 / 锚定，避免误伤 results/ 下要展示的图）
+/github_*.png
+/screen_*.png
+
+# 临时跑测产物（results/_codex_check、results/_smoke 等）
+results/_*/
+
+# 误建的项目副本 / 杂项自动化脚本
+/_clean_reupload/
+*.ps1
