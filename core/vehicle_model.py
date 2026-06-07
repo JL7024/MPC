@@ -15,9 +15,11 @@ class VehicleModel:
         前轮转角delta
     """
 
-    def __init__(self, L=2.5, dt=0.1):
+    def __init__(self, L=2.5, dt=0.1, v_min=0.0, v_max=None):
         self.L = L
         self.dt = dt
+        self.v_min = v_min
+        self.v_max = v_max
         self.state = np.zeros(4)
 
     def reset(self, x=0.0, y=0.0, phi=0.0, v=0.0):
@@ -41,6 +43,10 @@ class VehicleModel:
         y_next = y + v * np.sin(phi) * self.dt
         phi_next = phi + v / self.L * np.tan(delta) * self.dt
         v_next = v + a * self.dt
+        if self.v_min is not None:
+            v_next = max(self.v_min, v_next)
+        if self.v_max is not None:
+            v_next = min(self.v_max, v_next)
 
         return np.array([x_next, y_next, phi_next, v_next])
 

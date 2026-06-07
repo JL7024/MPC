@@ -28,6 +28,7 @@ Thumbs.db
 # Generated outputs (keep results/ tracked if you want to show plots in README)
 # results/
 *.log
+.tmp/
 
 # 根目录临时截图（注意 / 锚定，避免误伤 results/ 下要展示的图）
 /github_*.png

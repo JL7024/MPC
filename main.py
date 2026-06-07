@@ -37,7 +37,13 @@ from scenarios import SCENE_REGISTRY
 def run_simulation(car, ref, controller, init_state, max_steps=2000,
                    stop_dist_to_end=0.5,
                    estimator=None, sensors=None,
-                   obstacles_to_step=None):
+                   obstacles_to_step=None,
+                   stop_min_ref_progress=0.0,
+                   stop_divergence_dist=None,
+                   stop_divergence_patience=20,
+                   stop_capture_dist=None,
+                   stop_capture_speed=0.4,
+                   stop_solver_failure_patience=None):
     """
     跑一次闭环仿真到车辆到达参考终点 (或超出步数上限)
 
@@ -48,6 +54,9 @@ def run_simulation(car, ref, controller, init_state, max_steps=2000,
         init_state       : 车辆初始状态 [x, y, phi, v]
         max_steps        : 最大仿真步数
         stop_dist_to_end : 车辆距参考终点多近时判定完成
+        stop_capture_dist: 可选低速终点捕获半径; None 表示禁用
+        stop_capture_speed: 低速终点捕获允许的最大绝对速度
+        stop_solver_failure_patience: 连续多少拍求解失败后中断; None 表示禁用
         estimator        : ExtendedKalmanFilter 或 None
                            - None: 控制器拿真值 (老行为, regression 一致)
                            - 不为 None: 控制器拿 estimator.x (估计)
@@ -98,6 +107,10 @@ def run_simulation(car, ref, controller, init_state, max_steps=2000,
         ]
 
     end_xy = ref.points[-1, :2]
+    best_dist_to_end = np.inf
+    divergence_count = 0
+    solver_failure_count = 0
+    termination_reason = 'running'
 
     for step in range(max_steps):
         # ---------- 1. 选控制器输入: 真值 or EKF 估计 ----------
@@ -126,13 +139,45 @@ def run_simulation(car, ref, controller, init_state, max_steps=2000,
 
         # ---------- 3. 终止判定: 用真值 (公平度量) ----------
         dist_to_end = np.linalg.norm(state[:2] - end_xy)
-        if dist_to_end < stop_dist_to_end:
+        ref_progress = nearest_idx / max(1, len(ref) - 1)
+        if ref_progress >= stop_min_ref_progress and dist_to_end < stop_dist_to_end:
             print(f"  到达终点 @ step {step}, 距终点 {dist_to_end:.2f}m")
+            termination_reason = 'reached_end'
             break
+        if (stop_capture_dist is not None
+                and ref_progress >= stop_min_ref_progress
+                and dist_to_end < stop_capture_dist
+                and abs(state[3]) < stop_capture_speed):
+            print(f"  低速进入终点捕获区 @ step {step}, "
+                  f"距终点 {dist_to_end:.2f}m, 速度 {state[3]:.2f}m/s")
+            termination_reason = 'captured_end'
+            break
+        if ref_progress >= stop_min_ref_progress and stop_divergence_dist is not None:
+            if dist_to_end < best_dist_to_end:
+                best_dist_to_end = dist_to_end
+                divergence_count = 0
+            elif (dist_to_end > stop_divergence_dist and
+                  dist_to_end > best_dist_to_end + stop_dist_to_end):
+                divergence_count += 1
+            else:
+                divergence_count = 0
+            if divergence_count >= stop_divergence_patience:
+                print(f"  偏离终点过远 @ step {step}, 距终点 {dist_to_end:.2f}m")
+                termination_reason = 'diverged'
+                break
 
         # ---------- 4. 控制器求解 ----------
         u_opt, info = controller.solve(state_for_ctrl, ref, nearest_idx,
                                         u_prev=u_prev)
+        solver_status = str(info.get('status', 'n/a'))
+        if solver_status in ('optimal', 'optimal_inaccurate', 'n/a'):
+            solver_failure_count = 0
+        else:
+            solver_failure_count += 1
+        stop_for_solver_failure = (
+            stop_solver_failure_patience is not None
+            and solver_failure_count >= stop_solver_failure_patience
+        )
 
         # ---------- 5. 真值推进 ----------
         state = car.step(state, u_opt)
@@ -176,8 +221,13 @@ def run_simulation(car, ref, controller, init_state, max_steps=2000,
             hist['x_pred'].append(None)
         else:
             hist['x_pred'].append(x_pred)
+        if stop_for_solver_failure:
+            print(f"  MPC 连续求解失败 {solver_failure_count} 拍 @ step {step}, 仿真中断")
+            termination_reason = 'solver_failed'
+            break
     else:
         print(f"  达到最大步数 {max_steps}, 仿真中断")
+        termination_reason = 'max_steps'
 
     # 转 numpy
     for key in ('state', 'u', 'ref_state', 'ref_idx', 'solve_time', 'cost'):
@@ -193,6 +243,7 @@ def run_simulation(car, ref, controller, init_state, max_steps=2000,
         hist['x_pred'] = np.asarray(hist['x_pred'])
     else:
         hist['x_pred'] = None
+    hist['termination_reason'] = termination_reason
 
     return hist
 

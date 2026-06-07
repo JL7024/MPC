@@ -34,6 +34,7 @@ class MPCController(BaseController):
     def __init__(self, vehicle_model, N=20,
                  Q=None, R=None, Qf=None, Rd=None,
                  a_max=3.0, a_min=-5.0,
+                 v_min=0.0, v_max=None,
                  delta_max=np.deg2rad(30),
                  da_max=2.0, ddelta_max=np.deg2rad(30),
                  obstacles=None, r_car=1.25, margin=0.3,
@@ -96,6 +97,8 @@ class MPCController(BaseController):
         # 物理约束 (保留原属性, 内部约束构造和上层兼容查询都用)
         self.a_max = a_max
         self.a_min = a_min
+        self.v_min = v_min
+        self.v_max = v_max
         self.delta_max = delta_max
         self.da_max = da_max
         self.ddelta_max = ddelta_max
@@ -165,6 +168,10 @@ class MPCController(BaseController):
                 self.u_var[k, 1] >= -self.delta_max,
                 self.u_var[k, 1] <=  self.delta_max,
             ]
+            if self.v_min is not None:
+                constraints += [self.x_var[k + 1, 3] >= self.v_min]
+            if self.v_max is not None:
+                constraints += [self.x_var[k + 1, 3] <= self.v_max]
 
             # 控制增量上下界
             du = self.u_var[k] - u_prev_k
@@ -290,20 +297,22 @@ class MPCController(BaseController):
             solve_time = time.perf_counter() - t0
             print(f"[MPC] 求解器异常: {e}")
             self._x_pred_prev = None   # 失败丢弃 warm start
-            return u_prev_arr.copy(), {
+            return self._safe_fallback_control(u_prev_arr), {
                 'status': 'error', 'cost': np.nan,
                 'solve_time': solve_time,
                 'x_pred': None, 'u_pred': None,
+                'fallback': True,
             }
         solve_time = time.perf_counter() - t0
 
         if self.prob.status not in ['optimal', 'optimal_inaccurate']:
-            print(f"[MPC] 求解失败, status = {self.prob.status}, 沿用上次控制")
+            print(f"[MPC] 求解失败, status = {self.prob.status}, 紧急制动并回正")
             self._x_pred_prev = None   # 不可靠的 x_var 不能拿来作下一步 warm start
-            return u_prev_arr.copy(), {
+            return self._safe_fallback_control(u_prev_arr), {
                 'status': self.prob.status, 'cost': np.nan,
                 'solve_time': solve_time,
                 'x_pred': None, 'u_pred': None,
+                'fallback': True,
             }
 
         u0 = self.u_var.value[0]
@@ -318,6 +327,12 @@ class MPCController(BaseController):
             'x_pred': self.x_var.value,
             'u_pred': self.u_var.value,
         }
+
+    def _safe_fallback_control(self, u_prev):
+        """求解失败时制动并逐步回正，避免持续沿用大转角形成绕圈。"""
+        u_prev = np.asarray(u_prev, dtype=float).reshape(self.N_CTRL)
+        delta = np.clip(0.5 * u_prev[1], -self.delta_max, self.delta_max)
+        return np.array([self.a_min, delta], dtype=float)
 
     # =====================================================================
     # 避障: 半空间约束的线性化点更新

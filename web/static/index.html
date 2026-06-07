@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPC 交互沙盘</title>
+  <link rel="stylesheet" href="/static/styles.css?v=9">
+</head>
+<body>
+  <div class="app">
+    <aside class="panel panel-left">
+      <div class="brand">
+        <div>
+          <h1>MPC 交互沙盘</h1>
+          <p>规划、控制、估计、避障放在同一个闭环里观察。</p>
+        </div>
+      </div>
+
+      <section>
+        <h2>实验配置</h2>
+        <label>
+          参考轨迹
+          <select id="sceneSelect"></select>
+        </label>
+        <label>
+          障碍模板
+          <select id="obstacleScene">
+            <option value="none">无障碍</option>
+            <option value="block">静态障碍</option>
+            <option value="oncoming">对向来车</option>
+            <option value="crossing">横穿行人</option>
+          </select>
+        </label>
+        <label>
+          控制器
+          <select id="controller">
+            <option value="mpc">MPC</option>
+            <option value="pid">PID</option>
+            <option value="lqr">LQR</option>
+          </select>
+        </label>
+        <label class="toggle"><input id="ekfEnabled" type="checkbox"> EKF</label>
+        <label>
+          避障模式
+          <select id="avoidMode">
+            <option value="none">无</option>
+            <option value="hard">MPC 硬约束</option>
+            <option value="soft">MPC 软约束</option>
+          </select>
+        </label>
+        <div class="hint" id="capabilityHint"></div>
+      </section>
+
+      <section>
+        <h2>场景编辑</h2>
+        <div class="button-grid">
+          <button id="addObstacle" type="button">添加障碍</button>
+          <button id="deleteSelected" type="button">删除</button>
+        </div>
+        <label>
+          所选半径
+          <input id="selectedRadius" type="range" min="0.3" max="4" step="0.1" value="1.5">
+        </label>
+        <label class="toggle"><input id="selectedDynamic" type="checkbox"> 动态障碍</label>
+        <div class="xy-grid">
+          <label>vx <input id="selectedVx" type="number" step="0.2" value="0"></label>
+          <label>vy <input id="selectedVy" type="number" step="0.2" value="0"></label>
+        </div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <div class="toolbar">
+        <div class="status" id="statusText">就绪</div>
+        <div class="toolbar-actions">
+          <button id="resetScene" type="button">重置</button>
+          <button id="runSim" class="primary" type="button">运行</button>
+          <button id="playPause" type="button">播放</button>
+        </div>
+      </div>
+      <canvas id="sandbox" width="1100" height="620"></canvas>
+      <div class="timeline">
+        <input id="frameSlider" type="range" min="0" max="0" value="0">
+        <span id="frameLabel">0.0s</span>
+      </div>
+      <div class="metrics metrics-strip" id="metrics"></div>
+      <div class="diagnostics" id="diagnostics"></div>
+      <div class="charts">
+        <div class="chart-card">
+          <div class="chart-title">横向误差</div>
+          <canvas id="chartLat" width="360" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">航向误差</div>
+          <canvas id="chartHeading" width="360" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">速度误差</div>
+          <canvas id="chartSpeed" width="360" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">转角</div>
+          <canvas id="chartSteer" width="360" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">安全余量</div>
+          <canvas id="chartClearance" width="360" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">求解耗时</div>
+          <canvas id="chartSolve" width="360" height="120"></canvas>
+        </div>
+      </div>
+    </main>
+
+    <aside class="panel panel-right">
+      <section>
+        <h2>MPC 参数</h2>
+        <label>预测时域 N <input id="horizon" type="range" min="5" max="40" step="1" value="15"><span id="horizonValue"></span></label>
+        <label>位置权重 Q <input id="qPos" type="range" min="1" max="50" step="1" value="10"><span id="qPosValue"></span></label>
+        <label>航向权重 Q <input id="qPhi" type="range" min="1" max="40" step="1" value="5"><span id="qPhiValue"></span></label>
+        <label>转向权重 R <input id="rDelta" type="range" min="1" max="80" step="1" value="10"><span id="rDeltaValue"></span></label>
+        <label>软约束惩罚 lambda <input id="lambdaSoft" type="range" min="100" max="10000" step="100" value="1000"><span id="lambdaSoftValue"></span></label>
+      </section>
+
+      <section>
+        <h2>车辆与安全</h2>
+        <label>目标速度 <input id="targetSpeed" type="range" min="1" max="14" step="0.5" value="6"><span id="targetSpeedValue"></span></label>
+        <label>最大加速度 <input id="aMax" type="range" min="1" max="6" step="0.5" value="3"><span id="aMaxValue"></span></label>
+        <label>安全余量 <input id="safetyMargin" type="range" min="0" max="2" step="0.1" value="0.3"><span id="safetyMarginValue"></span></label>
+        <label>不确定性膨胀 alpha <input id="alphaUncert" type="range" min="0" max="1.5" step="0.1" value="0"><span id="alphaUncertValue"></span></label>
+      </section>
+
+      <section>
+        <h2>显示图层</h2>
+        <div class="layer-grid">
+          <label class="toggle compact"><input id="layerReference" type="checkbox" checked> 参考</label>
+          <label class="toggle compact"><input id="layerRaw" type="checkbox" checked> A* 原始</label>
+          <label class="toggle compact"><input id="layerSmooth" type="checkbox" checked> A* 平滑</label>
+          <label class="toggle compact"><input id="layerTrajectory" type="checkbox" checked> 实际</label>
+          <label class="toggle compact"><input id="layerPrediction" type="checkbox" checked> 预测</label>
+          <label class="toggle compact"><input id="layerSafety" type="checkbox" checked> 安全圈</label>
+        </div>
+      </section>
+
+      <section>
+        <h2>快速对比</h2>
+        <div class="button-grid">
+          <button id="compareControllers" type="button">控制器</button>
+          <button id="compareAvoidance" type="button">避障</button>
+        </div>
+        <button id="sweepHorizon" class="wide-button" type="button">扫描 N</button>
+        <div class="comparison-summary" id="comparisonSummary"></div>
+      </section>
+    </aside>
+  </div>
+
+  <script src="/static/app.js?v=10"></script>
+</body>
+</html>

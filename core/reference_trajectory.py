@@ -96,7 +96,7 @@ class ReferenceTrajectory:
 
         参数:
             waypoints     : 参考点列表
-            v_ref         : 参考速度 (m/s)
+            v_ref         : 参考速度 (m/s)，支持标量或 f(s) callable
             ds            : 弧长重采样间距 (m)
             smooth_window : 曲率平滑窗口 (m); <=0 表示不平滑。
                             折线 waypoint 在拐角处的二阶差分 kappa 会出尖刺,
@@ -149,7 +149,10 @@ class ReferenceTrajectory:
         points[:, self.IDX_X] = x
         points[:, self.IDX_Y] = y
         points[:, self.IDX_PHI] = phi
-        points[:, self.IDX_V] = v_ref
+        if callable(v_ref):
+            points[:, self.IDX_V] = v_ref(s)
+        else:
+            points[:, self.IDX_V] = v_ref
         points[:, self.IDX_KAPPA] = kappa
         points[:, self.IDX_S] = s
 
