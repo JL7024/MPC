@@ -160,9 +160,9 @@ def astar_scene() -> Scenario:
     """
     A* 全局规划 + B-spline 平滑 → 参考轨迹
 
-    工作区 80m x 30m, 1 个圆障碍放在画面中央并靠近直线路径, 让 A*
-    生成一段清晰但不过度复杂的绕行轨迹。障碍略微偏离路径中心线,
-    避免左右路径完全对称, 同时让平滑后曲率保持在车辆极限内。
+    工作区 80m x 30m, 3 个圆障碍沿路径交错摆放, 让 A* 生成一段清晰
+    但不过度复杂的连续绕行轨迹。障碍略微偏离路径中心线, 避免左右路径
+    完全对称, 同时让平滑后曲率保持在车辆极限内。
 
     pipeline:
         OccupancyGrid → astar → smooth_path → generate_from_waypoints → MPC
@@ -175,7 +175,11 @@ def astar_scene() -> Scenario:
     from planning import OccupancyGrid, astar, smooth_path
 
     # 工作区 + 障碍
-    obstacles = [(40.0, 2.0, 2.5)]
+    obstacles = [
+        (15.0, -3.5, 2.0),
+        (40.0,  2.0, 2.5),
+        (65.0, -3.5, 2.0),
+    ]
     gm = OccupancyGrid(x_min=-5, x_max=85, y_min=-15, y_max=15,
                        resolution=0.5)
     R_INFLATE = 1.55   # L/2 (1.25) + margin (0.3)
