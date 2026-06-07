@@ -156,9 +156,15 @@ def animate_results(hist, ref, dt, title='', save_path=None,
     pad = 3.0
     xs = [ref.points[:, 0].min(), ref.points[:, 0].max()]
     ys = [ref.points[:, 1].min(), ref.points[:, 1].max()]
-    if has_obs_traj:
-        xs += [obs_traj[..., 0].min(), obs_traj[..., 0].max()]
-        ys += [obs_traj[..., 1].min(), obs_traj[..., 1].max()]
+    if has_obs:
+        for m, obstacle in enumerate(obstacles):
+            radius = obstacle.r + r_car + margin
+            centers = (obs_traj[:, m]
+                       if has_obs_traj else np.asarray([obstacle.xy]))
+            xs += [centers[:, 0].min() - radius,
+                   centers[:, 0].max() + radius]
+            ys += [centers[:, 1].min() - radius,
+                   centers[:, 1].max() + radius]
     ax.set_xlim(min(xs) - pad, max(xs) + pad)
     ax.set_ylim(min(ys) - pad, max(ys) + pad)
 

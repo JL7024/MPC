@@ -160,9 +160,10 @@ def astar_scene() -> Scenario:
     """
     A* 全局规划 + B-spline 平滑 → 参考轨迹
 
-    工作区 80m x 30m, 3 个圆障碍错开摆放 (考虑 r_inflate=1.55m + 平滑后曲率
-    限制, 障碍间距和工作区宽度都需要够大, 否则 A* 折线拐角太急, B-spline
-    平滑后仍超 |kappa|<0.23 1/m 的车辆极限)。
+    工作区 80m x 30m, 10 个不同半径的圆障碍组成障碍场。靠近直线路径的
+    3 个关键障碍让 A* 连续绕行, 其余障碍限定可行空间并丰富规划场景。
+    考虑 r_inflate=1.55m + 平滑后曲率限制, 关键障碍之间保留足够间距,
+    避免 B-spline 平滑后超过 |kappa|<0.23 1/m 的车辆极限。
 
     pipeline:
         OccupancyGrid → astar → smooth_path → generate_from_waypoints → MPC
@@ -175,9 +176,18 @@ def astar_scene() -> Scenario:
     from planning import OccupancyGrid, astar, smooth_path
 
     # 工作区 + 障碍
-    obstacles = [(20.0,  3.0, 2.0),
-                 (40.0, -3.0, 2.5),
-                 (60.0,  4.0, 2.0)]
+    obstacles = [
+        (12.0, -8.5, 1.8),
+        (20.0,  3.0, 2.0),
+        (24.0,  9.5, 2.2),
+        (33.0, -9.5, 2.1),
+        (40.0, -3.0, 2.5),
+        (47.0,  9.5, 1.9),
+        (56.0, -9.0, 2.2),
+        (60.0,  4.0, 2.0),
+        (70.0,  9.0, 2.0),
+        (76.0, -8.5, 1.7),
+    ]
     gm = OccupancyGrid(x_min=-5, x_max=85, y_min=-15, y_max=15,
                        resolution=0.5)
     R_INFLATE = 1.55   # L/2 (1.25) + margin (0.3)
