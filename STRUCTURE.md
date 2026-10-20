@@ -53,6 +53,8 @@ MPC/
 │   ├── compare_episode_counts.py    # 不同 episode 数对比
 │   └── results/                     # reward 曲线 / 策略热力图
 │
+├── ros2/                            # ROS2 封装: 仿真/规划/EKF/控制节点 + launch + RViz2 (见 ros2/README.md)
+│
 ├── docs/                            # 交互式流程图 (HTML, 浏览器打开)
 │   ├── mpc_flow.html
 │   └── astar_mpc_precise.html

@@ -1,0 +1,59 @@
+# 各节点参数, 默认值都与离线仿真 (main.py) 保持一致。
+# 场景、控制器、是否用 EKF、仿真速度等常用开关由 launch 参数传入, 见 launch/full_pipeline.launch.py;
+# 这些开关不要写进下面的节点段, 否则会盖掉 launch 参数 (节点段参数优先级更高)。
+
+# 所有节点共用 (/** 匹配任意节点名)
+/**:
+  ros__parameters:
+    dt: 0.1             # 仿真 / 控制步长 [s], 与 main.py 的 VehicleModel(dt=0.1) 一致
+    wheelbase: 2.5      # 轴距 L [m]
+
+sim_node:
+  ros__parameters:
+    lockstep: true          # 每步等对应的控制指令再推进, 结果可复现
+    cmd_timeout: 1.0        # lockstep 时等指令的最长时间 [s], 超时沿用上一条
+    start_timeout: 30.0     # 等第一条控制指令的最长时间 [s]
+    gps_sigma: 0.5          # GPS 噪声标准差 [m]
+    gps_rate: 2             # 每 2 步测一次 = 5 Hz
+    wheel_sigma: 0.1        # 轮速噪声标准差 [m/s]
+    wheel_rate: 1           # 每步测一次 = 10 Hz; EKF 以轮速为节拍发布估计, 请保持 1
+    sensor_seed: 42         # 与 main.make_ekf_and_sensors 相同的随机种子
+    r_car: 1.25             # 只用于在 RViz 里画安全圈, 与 MPCController 默认值一致
+    margin: 0.3
+
+planner_node:
+  ros__parameters:
+    # 以下只在 scenario=astar 时使用, 数值与 scenarios.astar_scene 一致
+    x_min: -5.0
+    x_max: 85.0
+    y_min: -15.0
+    y_max: 15.0
+    resolution: 0.5         # 栅格边长 [m]
+    r_inflate: 1.55         # 障碍膨胀 = 车体半径 1.25 + 余量 0.3
+    start: [0.0, 0.0]
+    goal: [80.0, 0.0]
+    smooth_ds: 0.3          # B-spline 平滑后的重采样间距 [m]
+    smooth_factor: 20.0     # splprep 平滑因子
+    ref_ds: 0.1             # 参考轨迹最终采样间距 [m]
+    v_ref: 6.0              # 参考速度 [m/s]
+
+ekf_node:
+  ros__parameters:
+    init_offset: [0.5, -0.3, 0.05, 0.5]   # 初值相对真值的偏差 [x, y, phi, v]
+    p0_diag: [1.0, 1.0, 0.1, 1.0]         # 初始协方差对角线
+    q_diag: [0.01, 0.01, 0.001, 0.05]     # 过程噪声对角线
+
+controller_node:
+  ros__parameters:
+    avoidance_mode: hard    # hard = 半空间硬约束; soft = 二次惩罚软约束
+    lambda_soft: 1000.0     # soft 模式的惩罚权重
+    horizon: 0              # MPC 预测步数; 0 = 与 main.make_controller 相同 (15, 动态障碍场景 25)
+    avoid_side: ""          # 破对称提示; "" = 用场景设置, 或填 left / right / none
+    alpha_uncert: -1.0      # 不确定性锥增长率 [m/s]; 负数 = 用场景设置
+    stop_decel: 3.0         # 越过终点后的制动减速度 [m/s^2]
+
+monitor_node:
+  ros__parameters:
+    stop_dist_to_end: 0.5   # 到达判定, 与 main.run_simulation 相同
+    progress_every: 50      # 每隔多少步打印一次进度; 0 = 不打印
+    summary_path: ""        # 非空时把指标另存为 JSON

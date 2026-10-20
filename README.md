@@ -13,6 +13,7 @@
 - 🛰️ **EKF 多速率融合**：GPS 5 Hz + 轮速 10 Hz 异步融合，估计误差 < 0.3 m
 - 🗺️ **A\* + B-spline 规划**：8 邻域 A\*（膨胀栅格）+ B-spline 平滑 + 等弧长重采样生成参考
 - 🚧 **MPC 避障**：半空间硬约束 / 二次惩罚软约束双模式 + 动态障碍不确定性锥（SCP 思想，每步重线性化）
+- 🤖 **ROS2 封装**：仿真 / 规划 / EKF / 控制拆成独立节点，topic 通信，launch 一键启动，RViz2 显示参考轨迹与 MPC 预测时域；lockstep 时序下与离线仿真步数相同、指标差异 < 1e-5（见 [ros2/README.md](ros2/README.md)）
 
 ## 项目目的
 
@@ -215,6 +216,18 @@ python -m planning.smoothing        # B-spline 平滑 + 曲率检查
 python -m obstacles.static          # CircleObstacle
 python -m obstacles.dynamic         # DynamicObstacle predict/step
 ```
+
+### ROS2 版本
+
+规划、估计、控制拆成 ROS2 节点（Ubuntu 24.04 + ROS2 Jazzy，Windows 上通过 WSL2 运行），RViz2 实时显示参考轨迹和 MPC 预测时域：
+
+```bat
+cd ros2
+.\start_pipeline.bat                       :: Windows 一键启动 (也可以直接双击)
+.\start_pipeline.bat scenario:=oncoming    :: 换场景, 参数透传给 ros2 launch
+```
+
+环境准备、节点 / 话题说明和与离线仿真的对比见 [ros2/README.md](ros2/README.md)。
 
 ## 关键依赖
 
