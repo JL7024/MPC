@@ -1,0 +1,4 @@
+# 这些文件会在 WSL (Linux) 里直接执行或解析, 必须保持 LF 换行;
+# 本机 git 开了 core.autocrlf, 不写这条的话检出时会被改成 CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
