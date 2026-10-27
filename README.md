@@ -8,11 +8,12 @@
 
 ## 项目亮点
 
-- 🚗 **MPC 核心**：cvxpy 参数化 QP + OSQP warm-start，单步 ~5-15 ms；参考窗口按时间取 + `δ_ref = arctan(L·κ)` 前馈，QP 只解扰动
-- 📊 **三控制器对比**：MPC / PID(Stanley+PI) / LQR(误差状态+DARE) 在 8 个场景下量化对比跟踪性能
+- 🚗 **MPC 核心**：cvxpy 参数化 QP + OSQP warm-start，纯跟踪单步 ~5-15 ms；参考窗口按时间取 + `δ_ref = arctan(L·κ)` 前馈，QP 只解扰动
+- 📊 **三控制器对比**：MPC / PID(Stanley+PI) / LQR(误差状态+DARE) 在 9 个场景下量化对比跟踪性能
 - 🛰️ **EKF 多速率融合**：GPS 5 Hz + 轮速 10 Hz 异步融合，估计误差 < 0.3 m
 - 🗺️ **A\* + B-spline 规划**：8 邻域 A\*（膨胀栅格）+ B-spline 平滑 + 等弧长重采样生成参考
 - 🚧 **MPC 避障**：半空间硬约束 / 二次惩罚软约束双模式 + 动态障碍不确定性锥（SCP 思想，每步重线性化）
+- 🧭 **DWA 局部规划**：动态窗口采样 + 批量 rollout + 碰撞检查打分，与 MPC 避障在静态障碍 / 对向车 / 横穿行人场景下对比（`compare_dwa.py`）
 - 🤖 **ROS2 封装**：仿真 / 规划 / EKF / 控制拆成独立节点，topic 通信，launch 一键启动，RViz2 显示参考轨迹与 MPC 预测时域；lockstep 时序下与离线仿真步数相同、指标差异 < 1e-5（见 [ros2/README.md](ros2/README.md)）
 
 ## 项目目的
@@ -23,7 +24,7 @@
 - **控制层**：MPC、PID（Stanley + PI）、LQR（误差状态）三家对比
 - **估计层**：EKF 融合 GPS + 轮速，多速率传感器
 - **规划层**：A\* 全局规划 + B-spline 平滑生成参考
-- **决策层**：MPC 加避障约束（半空间硬约束 / 二次惩罚软约束两种）
+- **决策层**：MPC 加避障约束（半空间硬约束 / 二次惩罚软约束两种）；DWA 采样式局部规划作对比
 - **障碍**：静态圆障碍 + 动态恒速障碍 + 不确定性锥
 
 ## 系统架构
@@ -36,8 +37,8 @@ flowchart LR
         ASTAR["A* 全局规划"] --> SMOOTH["B-spline 平滑"]
     end
     SMOOTH --> REF["参考轨迹<br/>core/reference_trajectory"]
-    OBS["静/动障碍<br/>obstacles/"] -. MPC 避障约束 .-> CTRL
-    REF --> CTRL["控制器<br/>MPC / PID / LQR"]
+    OBS["静/动障碍<br/>obstacles/"] -. MPC 避障约束 / DWA 碰撞检查 .-> CTRL
+    REF --> CTRL["控制器<br/>MPC / PID / LQR / DWA"]
     SENS["传感器<br/>GPS + 轮速"] --> EKF["EKF 状态估计<br/>estimation/"]
     EKF -- 状态估计 --> CTRL
     CTRL -- 控制量 a, δ --> VEH["车辆模型<br/>core/vehicle_model"]
@@ -67,7 +68,7 @@ python main.py --case astar --ekf --no-show
 
 ## 核心思路 / 算法
 
-> 📈 交互式流程图（浏览器打开）：[MPC 求解流程](docs/mpc_flow.html) · [A\* + MPC 精确联动](docs/astar_mpc_precise.html)
+> 📈 交互式流程图：[MPC 求解流程](docs/mpc_flow.html) · [A\* + MPC 精确联动](docs/astar_mpc_precise.html)（单文件 HTML，GitHub 上点开只显示源码，clone 后用浏览器打开）
 
 ### 车辆模型
 后轴中心运动学自行车：
@@ -77,7 +78,7 @@ python main.py --case astar --ekf --no-show
 
 ### MPC（核心控制器）
 - cvxpy 参数化 QP（所有"会变"的量都是 `cp.Parameter`，QP 结构构建一次复用）
-- OSQP 求解 + warm start，单步 ~5-15 ms
+- OSQP 求解 + warm start，纯跟踪单步 ~5-15 ms；带避障约束时 ~20 ms；首拍含 cvxpy 编译，约 100 ms
 - 关键 trick：参考窗口按"未来 N 个 dt 时间"取，不按 idx 取（避免 ref 弧长 ds vs MPC 时间步 dt 的错位）
 - 反推 `delta_ref = arctan(L·κ)` 作为前馈，让 QP 只解扰动
 
@@ -106,6 +107,16 @@ python main.py --case astar --ekf --no-show
 
 cvxpy DPP 限制：`Parameter @ Parameter` 不允许，所以 `b_k = r_safe + n·p_obs` 在 numpy 侧预算后单独 Parameter 化。
 
+### DWA 局部规划
+采样类方法，和上面优化类的 MPC 避障做对比：
+
+- **动态窗口**：一步可达的控制量集合 `a ∈ [a_prev ± da_max]`、`δ ∈ [δ_prev ± dδ_max]`（再与上下限取交集，约束和 MPC 一致）。经典 DWA 是差速机器人在 `(v, ω)` 上采样，这里输入是 `[a, δ]`，直接在控制空间采样
+- **rollout**：每组控制量保持不变，按 `VehicleModel.step` 同样的离散方式批量前推 1.8 s；保持 `a` 不变是为了让"刹车让行"也能成为候选
+- **碰撞检查**：每一步对障碍预测位置 `obs.predict(t)` 检查 `d ≥ r_safe(t)`，`r_safe` 定义（含不确定性锥）与 MPC 相同，违反的候选直接丢弃
+- **打分**：路径横向偏差 + rollout 末端航向偏差 + 车速偏差 + 障碍距离 + 控制变化，路径终点进入 rollout 可达范围后再加一项"离终点的最近距离"；选代价最小的候选，只执行第一步
+- 不需要把"圆外"凸化，绕左还是绕右由打分决定，所以障碍正对路径时也不需要 `avoid_side` 提示
+- 对比结果（`compare_dwa.py`，图在 `results/dwa/`）：block / oncoming / crossing 三个场景两者都无碰撞、守住 `r_safe`。MPC 贴着路径绕、回线快，但 block 和 oncoming 里转角打到 30° 上限，单步平均 18–25 ms，block 和 oncoming 各有一拍 OSQP 迭代到上限触发兜底；DWA 动作更早更平顺，单步约 2 ms，但横向偏离更大、回线慢
+
 ## 输入与输出
 
 ### 输入
@@ -113,7 +124,7 @@ cvxpy DPP 限制：`Parameter @ Parameter` 不允许，所以 `b_k = r_safe + n�
 - 参考轨迹：直线 / 圆 / 双移线 / 加减速直线 / S 形蛇形 / A\* 规划 / 直线+障碍
 - 障碍：作为 `(cx, cy, r)` (静态) 或 `(cx, cy, vx, vy, r)` (动态) 元组写在场景里
 
-8 个场景由 `SCENE_REGISTRY` 字典查表，CLI 用 `--case <name>` 选。
+9 个场景由 `SCENE_REGISTRY` 字典查表，CLI 用 `--case <name>` 选。
 
 ### 输出
 全部输出到当前工作目录或 `--save-dir` 指定的目录：
@@ -121,7 +132,7 @@ cvxpy DPP 限制：`Parameter @ Parameter` 不允许，所以 `b_k = r_safe + n�
 - `<scene>.png` —— 6 面板单场景图（XY / 横向误差 / 航向误差 / 速度跟踪 / a / δ）
 - `<scene>_ekf_est.png` —— EKF 估计 4 面板（仅 `--ekf` 时）
 - `<scene>_planning.png` —— A\* 规划层叠图（仅含 `grid_map` 的场景）
-- `<scene>_avoidance.png` —— 避障双面板（仅 `--mpc-avoid` 时）
+- `<scene>_avoidance.png` —— 避障双面板（`--mpc-avoid` 或 `--controller dwa`，且场景含障碍时）
 - `<scene>.gif` —— 动画（仅 `--animate --anim-save out.gif`，需 pillow；mp4 需 ffmpeg）
 - 终端打印数值指标（步数 / RMS / max / solve_time）
 
@@ -137,6 +148,7 @@ cvxpy DPP 限制：`Parameter @ Parameter` 不允许，所以 `b_k = r_safe + n�
 | 行人横穿 | ![crossing](results/animations/crossing.gif) |
 | A\* 全局规划 | ![astar](results/animations/astar.gif) |
 | A\* + EKF 全 pipeline | ![astar_ekf](results/animations/astar_ekf.gif) |
+| MPC vs DWA（对向车） | ![dwa](results/dwa/compare_dwa_oncoming.png) |
 
 更多控制器对比图、规划/避障对比图见 [`results/`](results/) 目录。
 
@@ -165,6 +177,7 @@ python main.py --case block --mpc-avoid             # 静态避障 (hard)
 python main.py --case oncoming --mpc-avoid          # 动态对向车
 python main.py --case crossing --mpc-avoid          # 行人横穿
 python main.py --case block --mpc-avoid --avoid-mode soft --lambda-soft 1000
+python main.py --case oncoming --controller dwa     # DWA 局部规划 (总是使用场景里的障碍)
 
 # 出动画 (gif)
 python main.py --case astar --ekf --animate --anim-save astar_demo.gif
@@ -181,14 +194,17 @@ python compare_ekf.py --case lane
 
 python compare_avoid_modes.py           # hard vs soft λ 扫描
 python compare_avoid_modes.py --case oncoming
+
+python compare_dwa.py                   # MPC vs DWA 避障 (block / oncoming / crossing)
+python compare_dwa.py --case oncoming --save-dir results/dwa
 ```
 
 ### CLI 关键参数
 
 | 参数 | 取值 | 默认 | 用途 |
 |---|---|---|---|
-| `--case` | 8 个场景名 / `all` | `all` | 选场景 |
-| `--controller` | `mpc` / `pid` / `lqr` | `mpc` | 选控制器 |
+| `--case` | 9 个场景名 / `all` | `all` | 选场景 |
+| `--controller` | `mpc` / `pid` / `lqr` / `dwa` | `mpc` | 选控制器（`dwa` 总是使用场景里的障碍） |
 | `--ekf` | flag | off | 启用 EKF 状态估计 |
 | `--mpc-avoid` | flag | off | MPC 加避障约束（仅 obstacles 不为空才生效） |
 | `--avoid-mode` | `hard` / `soft` | `hard` | 避障约束类型 |
@@ -208,6 +224,7 @@ python -m core.reference_trajectory # 三种轨迹生成 + 查询接口
 python -m controllers.mpc           # MPC warm-start 求解时间
 python -m controllers.pid           # PID Stanley + PI
 python -m controllers.lqr           # LQR 完美跟踪 + 偏离测试
+python -m controllers.dwa           # DWA rollout 与车辆模型一致性 + 正前方障碍
 python -m estimation.ekf            # EKF predict + GPS update 收敛
 python -m estimation.sensors        # 多速率传感器 + 复现性
 python -m planning.grid_map         # 栅格 + 圆障碍 + 坐标转换
@@ -244,10 +261,12 @@ cd ros2
 
 ### 算法层
 
-- **`circle + EKF` 收敛慢/卡 max_steps**：`find_nearest` 已加 `N_ROLLBACK=20` 容许 last_idx 微回退（[main.py:108](main.py:108)），把 e_lat_rms 从 5.02m 改善到 4.58m，但闭曲线 + 噪声 + 欧氏距离终止的耦合根因没修。彻底修需重做"按弧长进度终止"
+- **`circle + EKF` 收敛慢/卡 max_steps**：`find_nearest` 已加 `N_ROLLBACK=20` 容许 last_idx 微回退（[main.py](main.py) 的 `run_simulation`），把 e_lat_rms 从 5.02m 改善到 4.58m，但闭曲线 + 噪声 + 欧氏距离终止的耦合根因没修。彻底修需重做"按弧长进度终止"
 - **B 方案在"障碍正前方 + 直线参考"时局部极小**：法向只有 -x 分量、y 没分量 → MPC 会"停"而非"绕"。`obstacle_blocking_scene` 把障碍稍偏 0.5 m 自然破对称；通用情况依赖上游规划提供方向 hint（`MPCController.avoid_side='left'/'right'`）
-- **OSQP `optimal_inaccurate` / `infeasible` 偶发**：动态对向车场景在最危险时刻 (T2C ≈ 0) 出现 1-2 次，靠"沿用上拍 u" fallback 顶过；不稳定但不致命
+- **带避障约束时 OSQP 偶发不收敛**：block、oncoming 各有 1 拍迭代到 20000 次上限（`user_limit`），这一拍耗时 150–250 ms，超出 10 Hz 控制周期；求解失败时兜底为全力制动 + 转角减半（`MPCController._safe_fallback_control`），不致命，但变道中途全力制动并不理想
 - **CILQR / SQP 多次重线性化未做**：当前避障是单步线性化（迭代隐式发生在跨 solve 之间），SCP 收敛性有理论局限。学术更精的做法是单步内多次重线性化，但增加 5-10x solve time
+- **DWA 纯跟踪精度低**：每条候选轨迹的控制量恒定，表达不了"先打再回"的转向，曲率连续变化的路径（双移线、蛇形）横向误差是 MPC / LQR 的数倍。定位是局部避障，不适合精确跟踪
+- **DWA 权重敏感**：车速项权重低时，刹车候选比绕行候选便宜，DWA 会停在障碍前出不来（局部极小）；rollout 超过约 2.2 s 时 block 场景绕完回线太慢、到不了终点。当前默认值是在 block / oncoming / crossing 上扫参选的
 
 ### 代码风格层
 

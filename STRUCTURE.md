@@ -5,10 +5,11 @@
 ```
 MPC/
 ├── main.py                          # 仿真入口 (CLI)
-├── scenarios.py                     # 8 个内置场景的工厂函数 + 注册表
+├── scenarios.py                     # 9 个内置场景的工厂函数 + 注册表
 ├── compare.py                       # 多控制器对比脚本 (MPC vs PID vs LQR)
 ├── compare_ekf.py                   # EKF on/off 对比脚本
 ├── compare_avoid_modes.py           # 避障 hard vs soft 对比脚本
+├── compare_dwa.py                   # 避障 MPC vs DWA 对比脚本
 │
 ├── core/
 │   ├── __init__.py
@@ -20,7 +21,8 @@ MPC/
 │   ├── base.py                      # BaseController 抽象 + ControlLimits
 │   ├── mpc.py                       # MPC (cvxpy + OSQP, 含避障约束)
 │   ├── pid.py                       # PID (Stanley 横向 + PI 纵向)
-│   └── lqr.py                       # LQR (误差状态 + DARE 每步重解)
+│   ├── lqr.py                       # LQR (误差状态 + DARE 每步重解)
+│   └── dwa.py                       # DWA (动态窗口采样局部规划, 含避障)
 │
 ├── estimation/
 │   ├── __init__.py
@@ -68,7 +70,8 @@ MPC/
     ├── phase_1/                     # 控制器对比图
     ├── phase_3/                     # 避障对比图
     ├── phase_4/                     # A* 规划图
-    └── phase_5/                     # 动态避障图
+    ├── phase_5/                     # 动态避障图
+    └── dwa/                         # MPC vs DWA 避障对比图
 ```
 
 ---
@@ -80,10 +83,11 @@ MPC/
 | 文件 | 职责 | 关键 API |
 |---|---|---|
 | `main.py` | **程序入口** —— `argparse` 解析 CLI、`run_simulation` 跑闭环、`run_case` 调度单场景、`make_controller` 工厂 | `run_simulation(car, ref, controller, ...)`, `make_controller(name, ...)`, `make_ekf_and_sensors(...)` |
-| `scenarios.py` | 8 个场景的工厂函数 (`straight_scene` / `circle_scene` / `lane_change_scene` / `accel_cruise_brake_scene` / `serpentine_scene` / `astar_scene` / `obstacle_blocking_scene` / `oncoming_vehicle_scene` / `crossing_pedestrian_scene`)，每个返回一个 `Scenario` dataclass。`SCENE_REGISTRY` 字典是名字 → 工厂的查表 | `Scenario`, `SCENE_REGISTRY` |
+| `scenarios.py` | 9 个场景的工厂函数 (`straight_scene` / `circle_scene` / `lane_change_scene` / `accel_cruise_brake_scene` / `serpentine_scene` / `astar_scene` / `obstacle_blocking_scene` / `oncoming_vehicle_scene` / `crossing_pedestrian_scene`)，每个返回一个 `Scenario` dataclass。`SCENE_REGISTRY` 字典是名字 → 工厂的查表 | `Scenario`, `SCENE_REGISTRY` |
 | `compare.py` | 同场景下跑 MPC/PID/LQR 三控制器，4 面板对比图 + 终端表格 | `main()` |
 | `compare_ekf.py` | 同场景跑 EKF on / off 两次，对比跟踪退化 | `main()` |
 | `compare_avoid_modes.py` | 同场景跑 hard + soft (λ=100/1000/10000) 四模式，对比避障策略 | `main()` |
+| `compare_dwa.py` | 同场景跑 MPC (硬约束) 和 DWA，对比避障：XY + 距障碍距离 / 车速 / 转角 4 面板图 + 终端表格 (终止原因、最小距离、是否撞、转角速率、求解时间)。默认 block / oncoming / crossing | `main()` |
 | `baseline_metrics.json` | 5 个 baseline 场景 (line/circle/lane/accel_brake/serpentine) 的精确回归数值 (步数/RMS/终态)，用于改动后的 byte-perfect 校验 | (数据文件) |
 
 ### `core/` —— 物理与几何
@@ -103,6 +107,7 @@ MPC/
 | `mpc.py` | **核心控制器** —— cvxpy 参数化 QP、OSQP 求解、warm start。支持 obstacles + 半空间避障 (hard/soft 双模式) + 不确定性锥 (`alpha_uncert`) + 破对称 hint (`avoid_side`)。所有"会变"的量都是 `cp.Parameter`，单步求解 ~5-15ms | `MPCController(vehicle_model, N=15, obstacles=None, avoidance_mode='hard', ...)` |
 | `pid.py` | Stanley 横向 (`-e_phi - arctan(k·e_lat/v)` + 弯道前馈) + PI 纵向 (含 anti-windup) | `PIDController(vehicle_model, k_lat=2.0, ...)` |
 | `lqr.py` | 误差状态 LQR：`e=[e_lat, e_phi, e_v]`，每步在参考点局部线性化 + DARE。控制律 `u = u_ref - K·e` | `LQRController(vehicle_model, Q=None, R=None, ...)` |
+| `dwa.py` | DWA 局部规划：在 `[a, delta]` 的动态窗口 (输入/增量上下限与 MPC 一致) 里采样，每组控制量保持不变批量前推，按与 MPC 相同的 `r_safe` (含不确定性锥) 做碰撞检查，可行候选按路径偏差 / 航向 / 车速 / 障碍距离 / 控制变化 / 终点距离打分，执行最优候选的第一步。`info['x_pred']` 是选中的 rollout | `DWAController(vehicle_model, horizon=1.8, obstacles=None, alpha_uncert=0.0, ...)` |
 
 ### `estimation/` —— 状态估计
 
@@ -158,10 +163,10 @@ MPC/
 唯一的程序入口是 `main.py`。所有功能都通过它的 CLI 触发：
 
 ```bash
-python main.py --case <scene_name> [--controller mpc|pid|lqr] [--ekf] [--mpc-avoid] [--avoid-mode hard|soft] [--lambda-soft <float>] [--animate] [--save-dir <path>]
+python main.py --case <scene_name> [--controller mpc|pid|lqr|dwa] [--ekf] [--mpc-avoid] [--avoid-mode hard|soft] [--lambda-soft <float>] [--animate] [--save-dir <path>]
 ```
 
-`compare.py`、`compare_ekf.py`、`compare_avoid_modes.py` 是独立的对比脚本，**复用** `main.py` 里的 `run_simulation` 和 `make_controller`，但有自己的 `if __name__ == '__main__'`。
+`compare.py`、`compare_ekf.py`、`compare_avoid_modes.py`、`compare_dwa.py` 是独立的对比脚本，**复用** `main.py` 里的 `run_simulation` 和 `make_controller`，但有自己的 `if __name__ == '__main__'`。
 
 每个模块 (`controllers/mpc.py`、`estimation/ekf.py`、`planning/astar.py`、…) 自带 `if __name__ == "__main__":` 自测，可以单独跑：
 
@@ -241,11 +246,11 @@ scenarios.py ──→ planning/ (仅 astar_scene 用)
     ↓
 core/ (vehicle_model, reference_trajectory)
     ↓
-controllers/ ──→ obstacles/ (仅 mpc.py 用)
+controllers/ ──→ obstacles/ (mpc.py / dwa.py 用)
     ↓
 estimation/ (独立, 不依赖 controllers)
     ↓
 viz/ (从 hist 字典反推, 不依赖具体控制器/估计器实现)
 ```
 
-`obstacles/` 和 `planning/` 是独立模块，互不依赖；它们都被 `scenarios.py` 和/或 `controllers/mpc.py` 引用。`viz/` 全部模块只读 `hist` 字典 + scenario 属性，不依赖控制器或 estimator 类型，方便扩展。
+`obstacles/` 和 `planning/` 是独立模块，互不依赖；它们都被 `scenarios.py` 和/或 `controllers/mpc.py`、`controllers/dwa.py` 引用。`viz/` 全部模块只读 `hist` 字典 + scenario 属性，不依赖控制器或 estimator 类型，方便扩展。
