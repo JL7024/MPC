@@ -8,13 +8,13 @@
 
 ## 项目亮点
 
-- 🚗 **MPC 核心**：cvxpy 参数化 QP + OSQP warm-start，纯跟踪单步 ~5-15 ms；参考窗口按时间取 + `δ_ref = arctan(L·κ)` 前馈，QP 只解扰动
-- 📊 **三控制器对比**：MPC / PID(Stanley+PI) / LQR(误差状态+DARE) 在 9 个场景下量化对比跟踪性能
-- 🛰️ **EKF 多速率融合**：GPS 5 Hz + 轮速 10 Hz 异步融合，估计误差 < 0.3 m
-- 🗺️ **A\* + B-spline 规划**：8 邻域 A\*（膨胀栅格）+ B-spline 平滑 + 等弧长重采样生成参考
-- 🚧 **MPC 避障**：半空间硬约束 / 二次惩罚软约束双模式 + 动态障碍不确定性锥（SCP 思想，每步重线性化）
-- 🧭 **DWA 局部规划**：动态窗口采样 + 批量 rollout + 碰撞检查打分，与 MPC 避障在静态障碍 / 对向车 / 横穿行人场景下对比（`compare_dwa.py`）
-- 🤖 **ROS2 封装**：仿真 / 规划 / EKF / 控制拆成独立节点，topic 通信，launch 一键启动，RViz2 显示参考轨迹与 MPC 预测时域；lockstep 时序下与离线仿真步数相同、指标差异 < 1e-5（见 [ros2/README.md](ros2/README.md)）
+- **MPC 核心**：cvxpy 参数化 QP + OSQP warm-start，纯跟踪单步 ~5-15 ms；参考窗口按时间取 + `δ_ref = arctan(L·κ)` 前馈，QP 只解扰动
+- **三控制器对比**：MPC / PID(Stanley+PI) / LQR(误差状态+DARE) 在 9 个场景下量化对比跟踪性能
+- **EKF 多速率融合**：GPS 5 Hz + 轮速 10 Hz 异步融合，估计误差 < 0.3 m
+- **A\* + B-spline 规划**：8 邻域 A\*（膨胀栅格）+ B-spline 平滑 + 等弧长重采样生成参考
+- **MPC 避障**：半空间硬约束 / 二次惩罚软约束双模式 + 动态障碍不确定性锥（SCP 思想，每步重线性化）
+- **DWA 局部规划**：动态窗口采样 + 批量 rollout + 碰撞检查打分，与 MPC 避障在静态障碍 / 对向车 / 横穿行人场景下对比（`compare_dwa.py`）
+- **ROS2 封装**：仿真 / 规划 / EKF / 控制拆成独立节点，topic 通信，launch 一键启动，RViz2 显示参考轨迹与 MPC 预测时域；lockstep 时序下与离线仿真步数相同、指标差异 < 1e-5（见 [ros2/README.md](ros2/README.md)）
 
 ## 项目目的
 
