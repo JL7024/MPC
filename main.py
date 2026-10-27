@@ -4,7 +4,7 @@
 用法:
     python main.py                            # 跑所有场景, 默认 MPC, 无 EKF
     python main.py --case lane                # 只跑双移线
-    python main.py --controller pid           # 选控制器 mpc/pid/lqr
+    python main.py --controller pid           # 选控制器 mpc/pid/lqr/dwa
     python main.py --ekf                      # 启用 EKF 状态估计
     python main.py --animate                  # 额外播放动画
 
@@ -23,7 +23,7 @@ plt.rcParams['font.sans-serif'] = ['SimHei']
 plt.rcParams['axes.unicode_minus'] = False
 
 from core.vehicle_model import VehicleModel
-from controllers import MPCController, PIDController, LQRController
+from controllers import MPCController, PIDController, LQRController, DWAController
 from estimation import ExtendedKalmanFilter, SensorSuite
 from viz.plot import compute_errors, plot_results
 from viz.plot_estimation import plot_estimation_results, plot_xy_with_gps
@@ -257,9 +257,9 @@ def make_controller(name, vehicle_model, obstacles=None, avoid_side=None,
                     lambda_soft=1000.0):
     """
     obstacles      : list of (cx,cy,r)/(cx,cy,vx,vy,r)/CircleObstacle/DynamicObstacle
-                     或 None. 只对 MPC 生效, PID/LQR 不支持避障约束 (会忽略).
-    avoid_side     : 破对称 hint, 仅 MPC 用. 'left'/'right'/None.
-    alpha_uncert   : 不确定性锥增长率 (m/s), 阶段 5 动态障碍场景应 > 0.
+                     或 None. 只对 MPC / DWA 生效, PID/LQR 不支持避障 (会忽略).
+    avoid_side     : 破对称 hint, 仅 MPC 用 (DWA 靠采样打分自己选边). 'left'/'right'/None.
+    alpha_uncert   : 不确定性锥增长率 (m/s), 阶段 5 动态障碍场景应 > 0. MPC / DWA 共用.
     avoidance_mode : 'hard' (B 半空间) | 'soft' (A 二次惩罚)
     lambda_soft    : soft 模式 slack 惩罚权重
     """
@@ -277,7 +277,10 @@ def make_controller(name, vehicle_model, obstacles=None, avoid_side=None,
         return PIDController(vehicle_model=vehicle_model)
     if name == 'lqr':
         return LQRController(vehicle_model=vehicle_model)
-    raise ValueError(f"未知控制器: {name} (可选: mpc / pid / lqr)")
+    if name == 'dwa':
+        return DWAController(vehicle_model=vehicle_model, obstacles=obstacles,
+                             alpha_uncert=alpha_uncert)
+    raise ValueError(f"未知控制器: {name} (可选: mpc / pid / lqr / dwa)")
 
 
 def make_ekf_and_sensors(vehicle_model, init_state, init_offset=None,
@@ -310,28 +313,31 @@ def run_case(scene_fn, controller_name='mpc', use_ekf=False,
              animate=False, anim_save=None):
     scenario = scene_fn()
 
-    # 透传场景里的障碍 + avoid_side hint 到 MPC (仅当 use_mpc_avoidance 时)
-    # 默认 False: 即使场景含障碍 (如 astar_scene), MPC 也只跟踪不约束 → 老行为
-    obs_for_mpc = None
+    # 透传场景里的障碍 + avoid_side hint 到控制器:
+    #   MPC: 仅当 use_mpc_avoidance 时. 默认 False: 即使场景含障碍 (如 astar_scene),
+    #        MPC 也只跟踪不约束 → 老行为
+    #   DWA: 局部规划器本来就是为避障设计的, 场景有障碍就总是传
+    use_avoidance = use_mpc_avoidance or controller_name == 'dwa'
+    obs_for_ctrl = None
     avoid_side = None
     alpha_uncert = 0.0
-    if use_mpc_avoidance and getattr(scenario, 'obstacles', None):
-        obs_for_mpc = scenario.obstacles
+    if use_avoidance and getattr(scenario, 'obstacles', None):
+        obs_for_ctrl = scenario.obstacles
         avoid_side = getattr(scenario, 'avoid_side', None)
         # 场景可指定不确定性锥增长率 (动态障碍场景应 > 0)
         alpha_uncert = getattr(scenario, 'alpha_uncert', 0.0)
 
     car = VehicleModel(L=2.5, dt=0.1)
     controller = make_controller(controller_name, car,
-                                  obstacles=obs_for_mpc,
+                                  obstacles=obs_for_ctrl,
                                   avoid_side=avoid_side,
                                   alpha_uncert=alpha_uncert,
                                   avoidance_mode=avoidance_mode,
                                   lambda_soft=lambda_soft)
     # 把控制器内部 normalize 后的障碍列表拿出来, 主循环用它 step (同一份对象 →
-    # 推进后 MPC 下次 solve 自动看到)
+    # 推进后 MPC / DWA 下次 solve 自动看到)
     obs_to_step = (controller.obstacles
-                    if (use_mpc_avoidance and hasattr(controller, 'obstacles'))
+                    if (use_avoidance and hasattr(controller, 'obstacles'))
                     else [])
 
     estimator, sensors = (None, None)
@@ -390,13 +396,13 @@ def run_case(scene_fn, controller_name='mpc', use_ekf=False,
     # 避障场景 (含 obstacles 但无 grid_map): 画 XY+障碍+min_dist 时间序列
     # 也可在 grid_map 场景额外画一张, 看 r_safe 是否被违反
     fig_avoid = None
-    if obs_for_mpc:
+    if obs_to_step:
         from viz.plot_avoidance import plot_avoidance
         avoid_save = (planning_save_path.replace('_planning', '_avoidance')
                       if planning_save_path else None)
-        # 不论 grid_map 场景还是 block/oncoming/crossing 场景, 只要 MPC 加了避障
-        # 约束就都画一张. 动态场景靠 hist['obs_traj'] 和 alpha_uncert 自动启用
-        # 时变障碍 + r_safe(t) 包络绘制.
+        # 不论 grid_map 场景还是 block/oncoming/crossing 场景, 只要控制器看得到
+        # 障碍 (MPC 加了避障约束 / DWA) 就都画一张. 动态场景靠 hist['obs_traj']
+        # 和 alpha_uncert 自动启用时变障碍 + r_safe(t) 包络绘制.
         fig_avoid = plot_avoidance(hist, scenario.ref,
                                     controller.obstacles,
                                     controller.dt,
@@ -437,8 +443,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--case', choices=['all'] + list(SCENE_REGISTRY.keys()),
                         default='all', help='要跑的场景')
-    parser.add_argument('--controller', choices=['mpc', 'pid', 'lqr'],
-                        default='mpc', help='选用的控制器')
+    parser.add_argument('--controller', choices=['mpc', 'pid', 'lqr', 'dwa'],
+                        default='mpc', help='选用的控制器 (dwa 总是使用场景里的障碍)')
     parser.add_argument('--ekf', action='store_true',
                         help='启用 EKF 状态估计 (控制器收估计值而非真值)')
     parser.add_argument('--mpc-avoid', action='store_true',
