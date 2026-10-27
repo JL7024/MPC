@@ -111,7 +111,14 @@ def plot_compare(sc, results, dt=0.1, save_path=None):
     ax.plot(sc.init_state[0], sc.init_state[1], 'go', ms=9, label='起点', zorder=6)
     ax.set_xlabel('x (m)'); ax.set_ylabel('y (m)')
     ax.set_aspect('equal'); ax.grid(True, alpha=0.3)
-    ax.legend(loc='best', fontsize=9)
+    ax.legend(loc='best', fontsize=8, ncol=2)
+    # XY 要等比例, 而场景多是 80 m × 6 m 这种细长条: 按长宽比定上排高度,
+    # 否则上排格子里大半是空白 (13.5 ≈ 上排坐标轴宽度 inch, +1.0 留给标题和坐标轴文字)
+    ax.autoscale_view()
+    (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+    top_h = float(np.clip(13.5 * (y1 - y0) / (x1 - x0), 1.2, 5.0)) + 1.0
+    gs.set_height_ratios([top_h, 4.0])
+    fig.set_size_inches(15, top_h + 5.0)
     title = 'XY 轨迹 (灰: 障碍起始位置与 r_safe'
     title += '; 圆点 + 同色虚线圆: 离障碍最近时车和障碍的位置)' if is_dynamic else ')'
     ax.set_title(title)

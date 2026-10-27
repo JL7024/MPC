@@ -78,7 +78,7 @@ python main.py --case astar --ekf --no-show
 
 ### MPC（核心控制器）
 - cvxpy 参数化 QP（所有"会变"的量都是 `cp.Parameter`，QP 结构构建一次复用）
-- OSQP 求解 + warm start，纯跟踪单步 ~5-15 ms；带避障约束时 ~20 ms；首拍含 cvxpy 编译，约 100 ms
+- OSQP 求解 + warm start，纯跟踪单步 ~5-15 ms；带避障约束时 ~20-30 ms；首拍含 cvxpy 编译，约 100 ms
 - 关键 trick：参考窗口按"未来 N 个 dt 时间"取，不按 idx 取（避免 ref 弧长 ds vs MPC 时间步 dt 的错位）
 - 反推 `delta_ref = arctan(L·κ)` 作为前馈，让 QP 只解扰动
 
@@ -115,7 +115,7 @@ cvxpy DPP 限制：`Parameter @ Parameter` 不允许，所以 `b_k = r_safe + n�
 - **碰撞检查**：每一步对障碍预测位置 `obs.predict(t)` 检查 `d ≥ r_safe(t)`，`r_safe` 定义（含不确定性锥）与 MPC 相同，违反的候选直接丢弃
 - **打分**：路径横向偏差 + rollout 末端航向偏差 + 车速偏差 + 障碍距离 + 控制变化，路径终点进入 rollout 可达范围后再加一项"离终点的最近距离"；选代价最小的候选，只执行第一步
 - 不需要把"圆外"凸化，绕左还是绕右由打分决定，所以障碍正对路径时也不需要 `avoid_side` 提示
-- 对比结果（`compare_dwa.py`，图在 `results/dwa/`）：block / oncoming / crossing 三个场景两者都无碰撞、守住 `r_safe`。MPC 贴着路径绕、回线快，但 block 和 oncoming 里转角打到 30° 上限，单步平均 18–25 ms，block 和 oncoming 各有一拍 OSQP 迭代到上限触发兜底；DWA 动作更早更平顺，单步约 2 ms，但横向偏离更大、回线慢
+- 对比结果（`compare_dwa.py`，图在 `results/dwa/`）：block / oncoming / crossing 三个场景两者都无碰撞、守住 `r_safe`。MPC 贴着路径绕、回线快，但 block 和 oncoming 里转角打到 30° 上限，单步平均 20–30 ms，block 和 oncoming 各有一拍 OSQP 迭代到上限触发兜底；DWA 动作更早更平顺，单步 2–3 ms，但横向偏离更大、回线慢
 
 ## 输入与输出
 
